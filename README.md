@@ -36,7 +36,7 @@ SheetJS has to load before the bundle (needed for `.xlsx` files):
       // POST to the Motorq API (endpoint pending)
     },
     submitExpert: function (payload) {
-      // POST to the HubSpot Forms API (portal ID and form ID pending)
+      // POST to the HubSpot Forms API
     },
   });
 </script>
@@ -86,7 +86,7 @@ Error messages live in `MotorqCapCheck.MESSAGES` and can be overridden through t
 - Allowed characters: letters, numbers, spaces, commas, line breaks and tabs. Anything else returns `invalid_input`.
 - Empty rows, whitespace, the BOM and the header row are removed. A first row is treated as a header if it contains "VIN" and isn't a 17-character VIN.
 - In `.xlsx` files, only the first sheet is read. If the header has a "VIN" column, only that column is used.
-- VINs are uppercased and deduplicated (`CONFIG.DEDUPE`, pending confirmation from Motorq). Invalid VINs are still sent, as requested by Motorq.
+- VINs are uppercased and deduplicated (configurable with `CONFIG.DEDUPE`). Invalid VINs are still sent, as requested by Motorq.
 - More than 1,000 unique VINs → Talk to an Expert.
 
 ## Development
@@ -98,11 +98,3 @@ npm run build   # generates dist/
 ```
 
 Open `dist/test-form.html` in a browser to try the full flow.
-
-## Pending
-
-- Motorq API endpoint, docs and error responses.
-- Cloudflare Turnstile site key (live and preview).
-- HubSpot portal ID and form ID for Talk to an Expert, plus its fields.
-- Final copy from the client.
-- Confirmation from Motorq on deduplication.
