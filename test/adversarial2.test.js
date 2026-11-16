@@ -252,12 +252,16 @@ function buildDom({ links = false } = {}) {
     '[data-action="paste"]': new FakeEl('button'),
     '[data-action="vins-submit"]': new Btn('button'),
     '[data-error="vins"]': new FakeEl('div'),
-    '[data-field="full-name"]': new FakeEl('input'),
+    '[data-field="first-name"]': new FakeEl('input'),
+    '[data-field="last-name"]': new FakeEl('input'),
     '[data-field="email"]': new FakeEl('input'),
     '[data-action="details-submit"]': new Btn('button'),
     '[data-error="details"]': new FakeEl('div'),
-    '[data-field="expert-name"]': new FakeEl('input'),
-    '[data-field="expert-email"]': new FakeEl('input'),
+    '[data-field="fleet-size"]': new FakeEl('select'),
+    '[data-field="company-name"]': new FakeEl('input'),
+    '[data-field="phone-country"]': new FakeEl('select'),
+    '[data-field="phone"]': new FakeEl('input'),
+    '[data-field="company-email"]': new FakeEl('input'),
     '[data-action="expert-submit"]': new Btn('button'),
     '[data-error="expert"]': new FakeEl('div'),
   };
@@ -274,6 +278,7 @@ function loadController() {
   global.window = global.window || {};
   window.MotorqVins = V;
   window.MotorqEmail = E;
+  window.MotorqContact = require('../src/contact-check.js');
   const p = path.join(__dirname, '../src/form-controller.js');
   delete require.cache[require.resolve(p)];
   require(p);
@@ -281,6 +286,14 @@ function loadController() {
 }
 
 // Flushes promise callbacks without relying on setTimeout (which some tests mock).
+function fillExpert(dom) {
+  dom.map['[data-field="fleet-size"]'].value = '26-100';
+  dom.map['[data-field="company-name"]'].value = 'Acme Logistics';
+  dom.map['[data-field="company-email"]'].value = 'jane@acme.com';
+  dom.map['[data-field="phone-country"]'].value = '+1';
+  dom.map['[data-field="phone"]'].value = '(555) 123-4567';
+}
+
 const flush = async (n = 10) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 
 async function toDetails(dom, form, text = `${A}\n${B}`) {
@@ -289,7 +302,8 @@ async function toDetails(dom, form, text = `${A}\n${B}`) {
   dom.map['[data-action="vins-submit"]'].click();
   await flush();
   assert.strictEqual(form.getState().step, 'details');
-  dom.map['[data-field="full-name"]'].value = 'Jane Doe';
+  dom.map['[data-field="first-name"]'].value = 'Jane';
+  dom.map['[data-field="last-name"]'].value = 'Doe';
   dom.map['[data-field="email"]'].value = 'jane@acme.com';
 }
 
@@ -325,8 +339,7 @@ test('G09b [Req 9] double-clicking "Talk to an Expert" (Webflow link) sends one 
   dom.map['[data-action="vins-submit"]'].click();
   await flush();
   assert.strictEqual(form.getState().step, 'expert');
-  dom.map['[data-field="expert-name"]'].value = 'Jane';
-  dom.map['[data-field="expert-email"]'].value = 'jane@acme.com';
+  fillExpert(dom);
   dom.map['[data-action="expert-submit"]'].click();
   dom.map['[data-action="expert-submit"]'].click();
   await new Promise((r) => setTimeout(r, 50));
@@ -402,8 +415,66 @@ test('HOLDS [Req 10] Back from step 2, edit the pasted VINs, Continue: step 2 us
   dom.map['[data-field="vins-text"]'].fire('input');
   dom.map['[data-action="vins-submit"]'].click();
   await flush();
-  assert.strictEqual(dom.map['[data-field="full-name"]'].value, 'Jane Doe');
+  assert.strictEqual(dom.map['[data-field="first-name"]'].value, 'Jane');
   dom.map['[data-action="details-submit"]'].click();
   await flush();
   assert.deepStrictEqual(sent, { fullName: 'Jane Doe', email: 'jane@acme.com', vins: C, turnstileToken: 'tok' });
+});
+
+/* ---------------- v1.2.0 review fixes ---------------- */
+
+test('timeout: the submit function gets an AbortSignal that is aborted when time runs out', async (t) => {
+  const Cap = loadController();
+  const dom = buildDom();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let signal;
+  const form = Cap.init({
+    root: dom, getTurnstileToken: () => 'tok',
+    submitCheck: (p, opts) => { signal = opts.signal; return new Promise(() => {}); },
+    submitExpert: () => Promise.resolve({ status: 200 }),
+  });
+  await toDetails(dom, form);
+  dom.map['[data-action="details-submit"]'].click();
+  await flush();
+  assert.ok(signal, 'no signal passed');
+  assert.strictEqual(signal.aborted, false);
+  t.mock.timers.tick(30000);
+  await flush();
+  assert.strictEqual(signal.aborted, true, 'request not cancelled on timeout');
+  assert.ok(dom.map['[data-error="details"]'].textContent);
+});
+
+test('timeout: Infinity (or 0) turns it off instead of failing every submit at once', async (t) => {
+  for (const timeoutMs of [Infinity, 0, 2 ** 31]) {
+    const Cap = loadController();
+    const dom = buildDom();
+    let resolve;
+    const form = Cap.init({
+      root: dom, getTurnstileToken: () => 'tok', timeoutMs,
+      submitCheck: () => new Promise((r) => { resolve = r; }),
+      submitExpert: () => Promise.resolve({ status: 200 }),
+    });
+    await toDetails(dom, form);
+    dom.map['[data-action="details-submit"]'].click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(dom.map['[data-error="details"]'].textContent, '', `timeoutMs ${timeoutMs}: failed right away`);
+    resolve({ status: 202 });
+    await flush();
+    assert.strictEqual(form.getState().step, 'success', `timeoutMs ${timeoutMs}`);
+  }
+});
+
+test('Turnstile is reset after a successful submit too (its token is spent)', async (t) => {
+  let resets = 0;
+  const Cap = loadController();
+  const dom = buildDom();
+  const form = Cap.init({
+    root: dom, getTurnstileToken: () => 'tok', resetTurnstile: () => { resets++; },
+    submitCheck: () => Promise.resolve({ status: 202 }), submitExpert: () => Promise.resolve({ status: 200 }),
+  });
+  await toDetails(dom, form);
+  dom.map['[data-action="details-submit"]'].click();
+  await flush();
+  assert.strictEqual(form.getState().step, 'success');
+  assert.strictEqual(resets, 1);
 });

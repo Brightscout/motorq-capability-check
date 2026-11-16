@@ -58,12 +58,18 @@ const payload = (page) => page.evaluate(() => {
   return JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
 });
 
+// Upload File and Paste VINs are tabs; Upload is the default one.
+const pasteTab = (page) => page.click('[data-tab="paste"]');
+
 async function pasteAndContinue(page, text) {
+  await pasteTab(page);
   await page.fill('[data-field="vins-text"]', text);
   await page.click('[data-action="vins-submit"]');
 }
 async function fillDetails(page, { name = 'Jane Doe', email = 'jane@acme.com' } = {}) {
-  await page.fill('[data-field="full-name"]', name);
+  const [first, ...rest] = name.split(' ');
+  await page.fill('[data-field="first-name"]', first);
+  await page.fill('[data-field="last-name"]', rest.join(' ') || 'Doe');
   await page.fill('[data-field="email"]', email);
   await page.check('#mock-turnstile');
 }
@@ -94,10 +100,10 @@ test('G02 [Req 5/8] pasting a table copied from a PDF/email sends only the VINs'
   await context.close();
 });
 
-test('G09 [Req 8] Webflow-style link button: double-clicking "Get My Results" sends ONE POST', async () => {
+test('G09 [Req 8] Webflow-style link button: double-clicking "Email My Results" sends ONE POST', async () => {
   // Webflow's Button element is <a class="w-button" href="#">, not <button>.
-  const html = HTML.replace('<button class="primary" data-action="details-submit">Get My Results</button>',
-    '<a href="#" class="primary" data-action="details-submit">Get My Results</a>');
+  const html = HTML.replace('<button class="primary" data-action="details-submit">Email My Results</button>',
+    '<a href="#" class="primary" data-action="details-submit">Email My Results</a>');
   assert.notStrictEqual(html, HTML);
   const { page, context } = await open({ html });
   await pasteAndContinue(page, `${A}\n${B}`);
@@ -117,8 +123,8 @@ test('G13 [Req 10] inside a <form> (Webflow Form Block): pressing Enter in step 
   await page.click('[data-action="vins-submit"]');
   await page.waitForTimeout(300);
   assert.strictEqual(await step(page), 'details');
-  await page.fill('[data-field="full-name"]', 'Jane Doe');
-  await page.press('[data-field="full-name"]', 'Enter'); // natural keyboard habit
+  await page.fill('[data-field="first-name"]', 'Jane');
+  await page.press('[data-field="first-name"]', 'Enter'); // natural keyboard habit
   await page.click('[data-step="details"] [data-action="back"]');
   // Actual: Enter = implicit submit = click on the form's first button, the hidden "Remove" link.
   assert.strictEqual(await page.textContent('[data-file-name]'), 'fleet.csv', 'the selected file was removed');
@@ -130,6 +136,7 @@ test('G18 [Req 10, Needs decision] browser/Android Back on step 2 returns to ste
   const page = await context.newPage();
   await page.goto('about:blank');
   await page.goto(PAGE);
+  await pasteTab(page);
   await page.fill('[data-field="vins-text"]', `${A}\n${B}`);
   await page.click('[data-action="vins-submit"]');
   assert.strictEqual(await step(page), 'details');
@@ -147,6 +154,7 @@ test('HOLDS [Req 1] Paste button does not read the clipboard; it focuses the tex
     window.__clip = 0;
     if (navigator.clipboard) navigator.clipboard.readText = () => { window.__clip++; return Promise.resolve('X'); };
   });
+  await page.tap('[data-tab="paste"]');
   await page.fill('[data-field="vins-text"]', A);
   await page.tap('[data-action="paste"]');
   assert.strictEqual(await page.evaluate(() => window.__clip), 0);

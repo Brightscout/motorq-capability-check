@@ -227,12 +227,16 @@ function buildDom() {
     '[data-action="paste"]': new FakeEl('button'),
     '[data-action="vins-submit"]': new FakeEl('button'),
     '[data-error="vins"]': new FakeEl('div'),
-    '[data-field="full-name"]': new FakeEl('input'),
+    '[data-field="first-name"]': new FakeEl('input'),
+    '[data-field="last-name"]': new FakeEl('input'),
     '[data-field="email"]': new FakeEl('input'),
     '[data-action="details-submit"]': new FakeEl('button'),
     '[data-error="details"]': new FakeEl('div'),
-    '[data-field="expert-name"]': new FakeEl('input'),
-    '[data-field="expert-email"]': new FakeEl('input'),
+    '[data-field="fleet-size"]': new FakeEl('select'),
+    '[data-field="company-name"]': new FakeEl('input'),
+    '[data-field="phone-country"]': new FakeEl('select'),
+    '[data-field="phone"]': new FakeEl('input'),
+    '[data-field="company-email"]': new FakeEl('input'),
     '[data-action="expert-submit"]': new FakeEl('button'),
     '[data-error="expert"]': new FakeEl('div'),
   };
@@ -249,10 +253,19 @@ function loadController() {
   global.window = global.window || {};
   window.MotorqVins = V;
   window.MotorqEmail = E;
+  window.MotorqContact = require('../src/contact-check.js');
   const p = path.join(__dirname, '../src/form-controller.js');
   delete require.cache[require.resolve(p)];
   require(p);
   return window.MotorqCapCheck;
+}
+
+function fillExpert(dom) {
+  dom.map['[data-field="fleet-size"]'].value = '26-100';
+  dom.map['[data-field="company-name"]'].value = 'Acme Logistics';
+  dom.map['[data-field="company-email"]'].value = 'jane@acme.com';
+  dom.map['[data-field="phone-country"]'].value = '+1';
+  dom.map['[data-field="phone"]'].value = '(555) 123-4567';
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -263,7 +276,8 @@ async function toDetails(dom, form, text = `${A}\n${B}`) {
   dom.map['[data-action="vins-submit"]'].click();
   await tick();
   assert.strictEqual(form.getState().step, 'details');
-  dom.map['[data-field="full-name"]'].value = 'Jane Doe';
+  dom.map['[data-field="first-name"]'].value = 'Jane';
+  dom.map['[data-field="last-name"]'].value = 'Doe';
   dom.map['[data-field="email"]'].value = 'jane@acme.com';
 }
 
@@ -362,8 +376,8 @@ test('F16 [Req 1, decided] file AND pasted text: the file is used', async () => 
   assert.deepStrictEqual(s.vins, [A]);
 });
 
-// Pending: depends on the fields of the client's HubSpot form.
-test('F21 [Req 9, Needs decision] Talk to an Expert sends only name and company email', { todo: 'waiting for the HubSpot form fields' }, async () => {
+// Decision (Figma flow): Talk to an Expert has fleet size, company, company email and phone. No name.
+test('F21 [Req 9, decided] Talk to an Expert sends the expert fields, how the user got there and the VIN count', async () => {
   let sent;
   const Cap = loadController();
   const dom = buildDom();
@@ -374,11 +388,13 @@ test('F21 [Req 9, Needs decision] Talk to an Expert sends only name and company 
   dom.map['[data-action="vins-submit"]'].click();
   await tick();
   assert.strictEqual(form.getState().step, 'expert');
-  dom.map['[data-field="expert-name"]'].value = 'Jane';
-  dom.map['[data-field="expert-email"]'].value = 'jane@acme.com';
+  fillExpert(dom);
   dom.map['[data-action="expert-submit"]'].click();
   await tick();
-  assert.deepStrictEqual(Object.keys(sent).sort(), ['email', 'fullName']);
+  assert.deepStrictEqual(sent, {
+    fleetSize: '26-100', companyName: 'Acme Logistics', email: 'jane@acme.com',
+    phone: '+1 (555) 123-4567', source: 'over-limit', vinCount: 1001,
+  });
 });
 
 // Decision (16/11): Paste does not read the clipboard. The user pastes into the

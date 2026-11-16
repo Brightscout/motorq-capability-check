@@ -16,11 +16,20 @@
   .card h2 { font-size:18px; margin:0 0 4px; }
   .card p.lead { color:var(--muted); margin:0 0 16px; font-size:14px; }
   label { display:block; font-weight:600; font-size:13px; margin:14px 0 6px; }
-  input[type=text], input[type=email], textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  input[type=text], input[type=email], input[type=tel], select, textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
   textarea { min-height:120px; font-family:ui-monospace,Menlo,monospace; font-size:13px; resize:vertical; }
   .drop { border:1.5px dashed var(--line); border-radius:8px; padding:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .drop .name { font-family:ui-monospace,Menlo,monospace; font-size:13px; }
-  .or { text-align:center; color:var(--muted); font-size:12px; margin:12px 0 0; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:4px; }
+  .tabs button { border:0; border-bottom:2px solid transparent; border-radius:0; padding:8px 14px; background:none; color:var(--muted); }
+  .tabs button[aria-selected=true] { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  .row.tight { margin-top:8px; }
+  .found { margin:14px 0 0; font-weight:600; color:var(--ok); }
+  .note { color:var(--muted); font-size:13px; margin:16px 0 0; }
+  .note a { color:var(--accent); }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:480px){ .cols{ grid-template-columns:1fr; } }
+  .phone { display:grid; grid-template-columns:130px minmax(0,1fr); gap:8px; }
   .row { display:flex; gap:8px; align-items:center; margin-top:18px; flex-wrap:wrap; }
   button { font:inherit; border-radius:8px; padding:9px 16px; border:1px solid var(--line); background:#fff; cursor:pointer; }
   button.primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
@@ -53,28 +62,42 @@
       <section data-step="vins">
         <h2>Check your fleet</h2>
         <p class="lead">Upload a file or paste your VINs.</p>
-        <label>Upload file (.xlsx, .csv, .txt)</label>
-        <div class="drop">
-          <input type="file" accept=".xlsx,.csv,.txt" data-field="file">
-          <span class="name" data-file-name></span>
-          <button class="link" data-action="clear-file" hidden>Remove</button>
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="upload" aria-selected="true">Upload File</button>
+          <button role="tab" data-tab="paste" aria-selected="false">Paste VINs</button>
         </div>
-        <p class="or">or</p>
-        <label>Paste VINs</label>
-        <textarea data-field="vins-text" placeholder="1HGCM82633A004352, 5YJSA1E26HF000337"></textarea>
+        <div data-panel="upload">
+          <label>Upload file (.xlsx, .csv, .txt)</label>
+          <div class="drop">
+            <input type="file" accept=".xlsx,.csv,.txt" data-field="file">
+            <span class="name" data-file-name></span>
+            <button class="link" data-action="clear-file" hidden>Remove</button>
+          </div>
+        </div>
+        <div data-panel="paste" hidden>
+          <label>Paste VINs</label>
+          <textarea data-field="vins-text" placeholder="1HGCM82633A004352, 5YJSA1E26HF000337"></textarea>
+          <div class="row tight">
+            <button data-action="paste">Paste</button>
+            <button class="link" data-action="clear-text" hidden>Clear</button>
+          </div>
+        </div>
+        <p class="found" data-vins-found hidden><span data-vin-count></span> VINs found</p>
         <div class="row">
-          <button data-action="paste">Paste</button>
-          <button class="primary" data-action="vins-submit" disabled>Continue</button>
+          <button class="primary" data-action="vins-submit" disabled>Get My Results</button>
         </div>
         <div class="error" data-error="vins" hidden></div>
+        <p class="note">Up to 1,000 VINs per check. If you have a larger list, <a href="#" data-action="open-expert">talk with our team</a> and we'll run it for you.</p>
       </section>
 
       <!-- Step 2: contact details -->
       <section data-step="details" hidden>
         <h2>Where should we send your results?</h2>
         <p class="lead"><span class="pill"><span data-vin-count></span> VINs</span> ready to check.</p>
-        <label>Full name</label>
-        <input type="text" data-field="full-name" autocomplete="name">
+        <div class="cols">
+          <div><label>First name</label><input type="text" data-field="first-name" autocomplete="given-name"></div>
+          <div><label>Last name</label><input type="text" data-field="last-name" autocomplete="family-name"></div>
+        </div>
         <label>Work email</label>
         <input type="email" data-field="email" autocomplete="email">
         <div class="captcha">
@@ -83,22 +106,34 @@
         </div>
         <div class="row">
           <button data-action="back">Back</button>
-          <button class="primary" data-action="details-submit">Get My Results</button>
+          <button class="primary" data-action="details-submit">Email My Results</button>
         </div>
         <div class="error" data-error="details" hidden></div>
+        <p class="note">Up to 1,000 VINs per check. If you have a larger list, <a href="#" data-action="open-expert">talk with our team</a> and we'll run it for you.</p>
       </section>
 
-      <!-- More than 1,000 VINs -->
+      <!-- Talk to an Expert: more than 1,000 VINs, or the link under the form -->
       <section data-step="expert" hidden>
-        <h2>A few last details</h2>
-        <p class="lead">You have <span class="pill"><span data-vin-count></span> VINs</span>. For fleets over 1,000, our team will reach out.</p>
-        <label>Full name</label>
-        <input type="text" data-field="expert-name">
-        <label>Company email</label>
-        <input type="email" data-field="expert-email">
+        <h2>Talk to an Expert</h2>
+        <p class="lead">Tell us about your fleet and our team will reach out.</p>
+        <label>Fleet Size</label>
+        <select data-field="fleet-size"><option value="">Select fleet size</option></select>
+        <label>Company Name</label>
+        <input type="text" data-field="company-name" autocomplete="organization">
+        <label>Company Email</label>
+        <input type="email" data-field="company-email" autocomplete="email">
+        <label>Phone Number</label>
+        <div class="phone">
+          <select data-field="phone-country" aria-label="Country code"></select>
+          <input type="tel" data-field="phone" autocomplete="tel-national">
+        </div>
+        <div class="captcha">
+          <input type="checkbox" id="mock-turnstile-expert"> <label for="mock-turnstile-expert" style="margin:0;font-weight:400">Verify you are human</label>
+          <small>Turnstile (mock, optional)</small>
+        </div>
         <div class="row">
           <button data-action="back">Back</button>
-          <button class="primary" data-action="expert-submit">Talk to an Expert</button>
+          <button class="primary" data-action="expert-submit">Submit</button>
         </div>
         <div class="error" data-error="expert" hidden></div>
       </section>
@@ -148,6 +183,7 @@
 <script>/*__XLSX__*/</script>
 <script>/*__VIN_PARSER__*/</script>
 <script>/*__EMAIL_CHECK__*/</script>
+<script>/*__CONTACT_CHECK__*/</script>
 <script>/*__FORM_CONTROLLER__*/</script>
 <script>
 (function () {
@@ -185,6 +221,11 @@
       return document.getElementById('mock-turnstile').checked ? 'mock-turnstile-token' : '';
     },
     resetTurnstile: function () { document.getElementById('mock-turnstile').checked = false; },
+    // Optional on the expert form: sent when present, never required.
+    getExpertTurnstileToken: function () {
+      return document.getElementById('mock-turnstile-expert').checked ? 'mock-expert-token' : '';
+    },
+    resetExpertTurnstile: function () { document.getElementById('mock-turnstile-expert').checked = false; },
     submitCheck: function (p) { return mockRequest('Motorq API', p); },
     submitExpert: function (p) { return mockRequest('HubSpot Forms API', p); },
     onStep: function (step, s) {
@@ -205,8 +246,7 @@
   document.querySelectorAll('[data-sample]').forEach(function (b) {
     b.addEventListener('click', function () {
       if (form.getState().step !== 'vins') return;
-      var clear = document.querySelector('[data-action="clear-file"]');
-      if (!clear.hidden) clear.click();
+      form.setTab('paste');
       var ta = document.querySelector('[data-field="vins-text"]');
       ta.value = samples[b.dataset.sample];
       ta.dispatchEvent(new Event('input'));

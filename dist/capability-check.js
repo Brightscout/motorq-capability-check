@@ -1,4 +1,4 @@
-/*! Motorq Capability Check v1.2.0 | Brightscout */
+/*! Motorq Capability Check v1.3.0 | Brightscout */
 /* src/vin-parser.js */
 /**
  * Motorq Capability Check: VIN reading and processing in the browser.
@@ -89,11 +89,12 @@
 
   /**
    * Splits text into rows and cells like a spreadsheet would. Tabs are the
-   * column separator if there are any (copy from Excel), commas otherwise
-   * (CSV). Quoted cells may contain separators, line breaks and "" quotes.
+   * column separator when most lines have them (copy from Excel), commas
+   * otherwise (CSV, even with a stray tab). Quoted cells may contain
+   * separators, line breaks and "" quotes.
    */
   function parseDelimited(text) {
-    var delimiter = text.indexOf('\t') !== -1 ? '\t' : ',';
+    var delimiter = chooseDelimiter(text);
     // No quotes (the usual case): a plain split is much faster on big files.
     if (text.indexOf('"') === -1) {
       return text.split('\n').map(function (line) {
@@ -103,6 +104,18 @@
     var rows = parseWith(text, delimiter, true);
     // An unclosed quote: read the text again treating quotes as plain characters.
     return rows || parseWith(text, delimiter, false);
+  }
+
+  function chooseDelimiter(text) {
+    if (text.indexOf('\t') === -1) return ',';
+    if (text.indexOf(',') === -1) return '\t';
+    var tabs = 0;
+    var commas = 0;
+    text.split('\n').forEach(function (line) {
+      if (line.indexOf('\t') !== -1) tabs++;
+      if (line.indexOf(',') !== -1) commas++;
+    });
+    return tabs >= commas ? '\t' : ',';
   }
 
   function parseWith(text, delimiter, useQuotes) {
@@ -166,11 +179,12 @@
     if (anchor) {
       // VINs listed across a row: read the grid sideways.
       var right = countVinsRight(rows, anchor);
-      if (right > 0 && right > countVinsDown(rows, anchor)) {
+      var sideways = right > 0 && right > countVinsDown(rows, anchor);
+      if (sideways) {
         rows = transpose(rows);
         anchor = findAnchor(rows);
       }
-      tokens = tokensFromAnchor(rows, anchor);
+      tokens = tokensFromAnchor(rows, anchor, sideways);
     } else {
       tokens = tokensWithoutAnchor(rows);
     }
@@ -218,12 +232,12 @@
    * Keeps the anchor's column and any other column where most filled cells
    * (from the anchor row down) are VINs, then takes the VINs out of them.
    */
-  function tokensFromAnchor(rows, anchor) {
+  function tokensFromAnchor(rows, anchor, sideways) {
     var cols = selectColumns(rows, anchor);
     var out = [];
     rows.forEach(function (row, r) {
       cols.forEach(function (c) {
-        vinsInCell(row[c], r < anchor.row).forEach(function (t) { out.push(t); });
+        vinsInCell(row[c], r < anchor.row, sideways).forEach(function (t) { out.push(t); });
       });
     });
     return out;
@@ -256,8 +270,10 @@
    * - A cell with one word: a header ("VIN") is skipped. Above the first real
    *   VIN, only something that looks like a VIN is kept (titles are skipped).
    *   Below it, anything else is sent: an invalid VIN is still a VIN.
+   * - Read sideways, "above" is what was left of the first VIN in the row
+   *   (unit numbers, plates), so only long values (11+) are kept there.
    */
-  function vinsInCell(cell, aboveAnchor) {
+  function vinsInCell(cell, aboveAnchor, sideways) {
     var tokens = tokensOf(cell);
     if (!tokens.length) return [];
 
@@ -268,26 +284,54 @@
     var token = tokens[0];
     if (isVin(token)) return [token];
     if (isHeader(cell)) return [];
-    if (aboveAnchor) return VIN_LIKE.test(token) ? [token] : [];
+    if (aboveAnchor) return (sideways ? VIN_LIKE_LONG : VIN_LIKE).test(token) ? [token] : [];
     return [token];
   }
 
   /**
-   * No real VIN anywhere. Characters are still checked, but only values that
-   * look like a VIN are sent, so a sheet with no VINs ("Make, Model, Year")
-   * gives "No VINs detected" instead of sending its words.
+   * No real VIN anywhere (all of them short or mistyped).
+   * - With a VIN header ("VIN", "Vehicle Identification Number"…): only the
+   *   values in those columns, below the header.
+   * - Without one: only values that look like a VIN are sent, so a sheet with
+   *   no VINs ("Make, Model, Year") gives "No VINs detected".
+   * Characters only count in what would be sent, or in values that look like
+   * a VIN with stray characters ("1HGCM82633A00435;2"). Dates, models
+   * ("F-150") and notes in other columns don't make the file invalid.
    */
   function tokensWithoutAnchor(rows) {
     var out = [];
+    var header = findHeader(rows);
+    if (header) {
+      for (var r = header.row + 1; r < rows.length; r++) {
+        header.cols.forEach(function (c) {
+          vinsInCell(rows[r][c], false).forEach(function (t) { out.push(t); });
+        });
+      }
+      return out;
+    }
     rows.forEach(function (row) {
       row.forEach(function (cell) {
-        if (!cell || isHeader(cell)) return;
+        if (!cell) return;
         tokensOf(cell).forEach(function (t) {
-          if (!TOKEN_ALLOWED.test(t) || VIN_LIKE.test(t)) out.push(t);
+          if (VIN_LIKE.test(t) || (!TOKEN_ALLOWED.test(t) && looksLikeBrokenVin(t))) out.push(t);
         });
       });
     });
     return out;
+  }
+
+  /** First row with a VIN header cell, and the columns of those cells. */
+  function findHeader(rows) {
+    for (var r = 0; r < rows.length; r++) {
+      var cols = [];
+      rows[r].forEach(function (cell, c) { if (cell && isHeader(cell)) cols.push(c); });
+      if (cols.length) return { row: r, cols: cols };
+    }
+    return null;
+  }
+
+  function looksLikeBrokenVin(token) {
+    return token.split(/[^A-Za-z0-9]+/).some(function (part) { return VIN_LIKE.test(part); });
   }
 
   /* ---------- Files ---------- */
@@ -562,23 +606,100 @@
   else root.MotorqEmail = api;
 })(typeof window !== 'undefined' ? window : this);
 
+/* src/contact-check.js */
+/**
+ * Motorq Capability Check: contact field helpers (step 2 and Talk to an Expert).
+ *
+ * Pure logic, no DOM. Exposes window.MotorqContact in the browser and
+ * module.exports in Node (tests).
+ */
+(function (root) {
+  'use strict';
+
+  var ERRORS = {
+    PHONE_REQUIRED: 'phone_required',
+    PHONE_INVALID: 'phone_invalid',
+  };
+
+  // Placeholder options until the client sends the final ones. Replace them
+  // through the `fleetSizes` option of MotorqCapCheck.init.
+  var FLEET_SIZES = ['1-25', '26-100', '101-500', '501-1,000', '1,000+'];
+
+  // Country codes for the phone select. Replace through the `phoneCountries` option.
+  var PHONE_COUNTRIES = [
+    { value: '+1', label: 'US/CA +1' },
+    { value: '+52', label: 'MX +52' },
+    { value: '+44', label: 'UK +44' },
+    { value: '+49', label: 'DE +49' },
+    { value: '+33', label: 'FR +33' },
+    { value: '+34', label: 'ES +34' },
+    { value: '+39', label: 'IT +39' },
+    { value: '+31', label: 'NL +31' },
+    { value: '+55', label: 'BR +55' },
+    { value: '+54', label: 'AR +54' },
+    { value: '+57', label: 'CO +57' },
+    { value: '+56', label: 'CL +56' },
+    { value: '+91', label: 'IN +91' },
+    { value: '+61', label: 'AU +61' },
+    { value: '+81', label: 'JP +81' },
+  ];
+
+  /** "Jane" + "Doe" → "Jane Doe". Extra spaces are collapsed and trimmed. */
+  function joinName(first, last) {
+    return [first, last]
+      .map(function (part) { return String(part == null ? '' : part).replace(/\s+/g, ' ').trim(); })
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  /**
+   * Basic phone check: digits, spaces, dashes and parentheses only, with
+   * 6 to 15 digits. Returns { ok: true, phone } (trimmed) or { ok: false, error }.
+   */
+  function validatePhone(value) {
+    var phone = String(value == null ? '' : value).trim();
+    if (!phone) return { ok: false, error: ERRORS.PHONE_REQUIRED };
+    if (!/^[0-9\s()-]+$/.test(phone)) return { ok: false, error: ERRORS.PHONE_INVALID };
+    var digits = phone.replace(/\D/g, '').length;
+    if (digits < 6 || digits > 15) return { ok: false, error: ERRORS.PHONE_INVALID };
+    return { ok: true, phone: phone };
+  }
+
+  var api = {
+    ERRORS: ERRORS,
+    FLEET_SIZES: FLEET_SIZES,
+    PHONE_COUNTRIES: PHONE_COUNTRIES,
+    joinName: joinName,
+    validatePhone: validatePhone,
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.MotorqContact = api;
+})(typeof window !== 'undefined' ? window : this);
+
 /* src/form-controller.js */
 /**
- * Motorq Capability Check: form controller (steps, Back, VINs kept in memory).
+ * Motorq Capability Check: form controller (steps, tabs, live VIN count, Back,
+ * VINs kept in memory, submits).
  *
  * Markup-agnostic: every element is found through configurable selectors, so it
  * can be wired to the Webflow markup by changing only the `selectors` object.
  *
- * Requires MotorqVins (vin-parser.js) and MotorqEmail (email-check.js).
+ * Requires MotorqVins (vin-parser.js), MotorqEmail (email-check.js) and
+ * MotorqContact (contact-check.js).
  *
  * Usage:
  *   MotorqCapCheck.init({
  *     root: '#cap-check',
- *     submitCheck:  function (payload) { return fetch(...) },  // Motorq API
+ *     submitCheck:  function (payload, opts) { return fetch(..., { signal: opts.signal }) },
  *     submitExpert: function (payload) { return fetch(...) },  // HubSpot Forms API
  *     getTurnstileToken: function () { return turnstile.getResponse() },
  *     resetTurnstile: function () { turnstile.reset() },       // optional
- *     timeoutMs: 30000,                                        // optional
+ *     getExpertTurnstileToken: function () { ... },            // optional, never required
+ *     resetExpertTurnstile: function () { ... },               // optional
+ *     fleetSizes: ['1-25', ...],                               // optional
+ *     phoneCountries: [{ value: '+1', label: 'US +1' }, ...],  // optional
+ *     timeoutMs: 30000,                                        // optional, 0 = off
  *     history: true,                                           // optional
  *   });
  *
@@ -599,23 +720,33 @@
       success: '[data-step="success"]',
       expertSuccess: '[data-step="expert-success"]',
     },
-    // Step 1: VINs
+    // Step 1: VINs. Upload and Paste are tabs (data-tab="upload|paste") with
+    // their panels (data-panel="upload|paste").
+    tabs: '[data-tab]',
+    panels: '[data-panel]',
     fileInput: '[data-field="file"]',
     fileName: '[data-file-name]',
     fileClear: '[data-action="clear-file"]',
     textarea: '[data-field="vins-text"]',
+    textClear: '[data-action="clear-text"]',
     pasteButton: '[data-action="paste"]',
     vinsSubmit: '[data-action="vins-submit"]',
     vinsError: '[data-error="vins"]',
     vinCount: '[data-vin-count]',
+    vinsFound: '[data-vins-found]',
     // Step 2: contact details
-    fullName: '[data-field="full-name"]',
+    firstName: '[data-field="first-name"]',
+    lastName: '[data-field="last-name"]',
     email: '[data-field="email"]',
     detailsSubmit: '[data-action="details-submit"]',
     detailsError: '[data-error="details"]',
     // Talk to an Expert
-    expertName: '[data-field="expert-name"]',
-    expertEmail: '[data-field="expert-email"]',
+    openExpert: '[data-action="open-expert"]',
+    fleetSize: '[data-field="fleet-size"]',
+    companyName: '[data-field="company-name"]',
+    companyEmail: '[data-field="company-email"]',
+    phoneCountry: '[data-field="phone-country"]',
+    phone: '[data-field="phone"]',
     expertSubmit: '[data-action="expert-submit"]',
     expertError: '[data-error="expert"]',
     // Shared
@@ -627,23 +758,37 @@
     no_vins: 'No VINs detected.',
     unsupported_file: 'Unsupported file. Upload a .xlsx, .csv or .txt file.',
     file_read_error: "We couldn't read that file. Try again or paste your VINs.",
-    name_required: 'Please enter your full name.',
+    first_name_required: 'Please enter your first name.',
+    last_name_required: 'Please enter your last name.',
     email_required: 'Please enter your work email.',
     email_invalid: 'Please enter a valid email address.',
     email_personal: 'Please use your work email.',
     captcha: 'Please complete the verification.',
+    fleet_size_required: 'Please select your fleet size.',
+    company_name_required: 'Please enter your company name.',
+    phone_country_required: 'Please select a country code.',
+    phone_required: 'Please enter your phone number.',
+    phone_invalid: 'Please enter a valid phone number.',
     server: 'Something went wrong. Please try again in a few minutes.',
   };
+
+  // Wait this long after the user stops typing before counting pasted VINs.
+  var LIVE_COUNT_DELAY = 300;
 
   function init(config) {
     var V = root.MotorqVins;
     var E = root.MotorqEmail;
-    if (!V || !E) throw new Error('vin-parser.js and email-check.js must be loaded first');
+    var C = root.MotorqContact;
+    if (!V || !E || !C) throw new Error('vin-parser.js, email-check.js and contact-check.js must be loaded first');
 
     var sel = merge(DEFAULT_SELECTORS, config.selectors || {});
     var msg = Object.assign({}, MESSAGES, config.messages || {});
     var successStatuses = config.successStatuses || [200, 202];
-    var timeoutMs = config.timeoutMs || 30000;
+    // 0, false, null or Infinity turn the timeout off. Browsers fire timers
+    // over 2^31-1 ms right away, so those turn it off too.
+    var timeoutMs = config.timeoutMs === undefined ? 30000 : Number(config.timeoutMs);
+    var useTimeout = timeoutMs > 0 && timeoutMs <= 2147483647;
+    var activeClass = config.activeClass || 'is-active';
     var container = typeof config.root === 'string' ? document.querySelector(config.root) : config.root;
     var $ = function (s) { return container.querySelector(s); };
     var $$ = function (s) { return Array.prototype.slice.call(container.querySelectorAll(s)); };
@@ -652,22 +797,40 @@
     // Android's back gesture) goes to the previous step instead of leaving the page.
     var useHistory = config.history !== false && !!root.history &&
       typeof root.history.pushState === 'function' && typeof root.addEventListener === 'function';
-    var ignoreNextPop = false;
+    // Steps our own Back button asked the browser to go back to, in order.
+    var expectedPops = [];
+    var TERMINAL = { success: true, expertSuccess: true };
 
     // State. VINs live here, in memory, across steps.
-    // vinsJob: increases when the input changes, so a slow file read that is
-    // no longer current gets discarded.
-    var state = { step: 'vins', history: [], vins: [], selectedFile: null, busy: false, vinsJob: 0 };
+    // - tab: active input tab ('upload' or 'paste'); null when the markup has
+    //   no tabs (then a selected file wins over pasted text).
+    // - live: the latest parse of each input, shown as "N VINs found" and
+    //   reused on submit.
+    // - vinsJob: increases when the input changes, so a slow file read that is
+    //   no longer current gets discarded.
+    // - expertSource / expertFrom: how and from which step the user reached
+    //   Talk to an Expert.
+    // - inputVersion / vinsVersion: the input changes since the VINs in
+    //   memory were processed, so browser Forward can't reuse stale VINs.
+    var state = {
+      step: 'vins', history: [], vins: [], selectedFile: null, busy: false, vinsJob: 0,
+      tab: null, live: { file: null, text: null }, expertSource: null, expertFrom: null,
+      inputVersion: 0, vinsVersion: -1,
+    };
+    var liveTimer = null;
 
     var el = {
       fileInput: $(sel.fileInput), fileName: $(sel.fileName), fileClear: $(sel.fileClear),
-      textarea: $(sel.textarea), pasteButton: $(sel.pasteButton),
+      textarea: $(sel.textarea), textClear: $(sel.textClear), pasteButton: $(sel.pasteButton),
       vinsSubmit: $(sel.vinsSubmit), vinsError: $(sel.vinsError),
-      fullName: $(sel.fullName), email: $(sel.email),
+      firstName: $(sel.firstName), lastName: $(sel.lastName), email: $(sel.email),
       detailsSubmit: $(sel.detailsSubmit), detailsError: $(sel.detailsError),
-      expertName: $(sel.expertName), expertEmail: $(sel.expertEmail),
+      fleetSize: $(sel.fleetSize), companyName: $(sel.companyName), companyEmail: $(sel.companyEmail),
+      phoneCountry: $(sel.phoneCountry), phone: $(sel.phone),
       expertSubmit: $(sel.expertSubmit), expertError: $(sel.expertError),
     };
+    var tabs = $$(sel.tabs);
+    var panels = $$(sel.panels);
 
     /* ----- Navigation ----- */
 
@@ -676,32 +839,67 @@
       if (!opts.isBack) state.history.push(state.step);
       state.step = step;
       Object.keys(sel.steps).forEach(function (key) {
-        var node = $(sel.steps[key]);
-        if (!node) return;
-        var hide = key !== step;
-        node.hidden = hide;
-        // Site CSS (e.g. a Webflow class with display:flex) can override the
-        // hidden attribute, so the inline style is set as well.
-        if (node.style) node.style.display = hide ? 'none' : '';
+        setVisible($(sel.steps[key]), key === step);
       });
       if (!opts.initial) focusStep($(sel.steps[step]));
       if (useHistory && !opts.isBack && !opts.initial) {
-        root.history.pushState({ motorqCapCheck: step }, '');
+        // Success screens replace the step 2 entry: browser Back from them
+        // starts over instead of reopening a filled-in step 2.
+        if (TERMINAL[step]) replaceEntry(step);
+        else root.history.pushState({ motorqCapCheck: step }, '');
       }
       if (config.onStep) config.onStep(step, getState());
     }
 
+    // Marks the current browser history entry with a step, keeping whatever
+    // state other scripts (e.g. Webflow) stored in it.
+    function replaceEntry(step) {
+      var current = root.history.state;
+      var next = current && typeof current === 'object' ? Object.assign({}, current) : {};
+      next.motorqCapCheck = step;
+      root.history.replaceState(next, '');
+    }
+
     // Browser Back / Forward between our history entries.
     function onPopState(e) {
-      if (ignoreNextPop) { ignoreNextPop = false; return; }
-      var target = (e.state && e.state.motorqCapCheck) || 'vins';
-      if (target === state.step) return;
+      var key = e.state && e.state.motorqCapCheck;
+
+      // Our own Back button already showed the step; only check the entry.
+      if (expectedPops.length) {
+        var expected = expectedPops.shift();
+        if (key !== expected) replaceEntry(expected);
+        return;
+      }
+
+      // An entry the form didn't create (a #section link, another script):
+      // stay on this step and remember it there.
+      if (!key) { replaceEntry(state.step); return; }
+      if (key === state.step) return;
+
       if (state.busy) {
         // Mid-submit: stay on this step.
         root.history.pushState({ motorqCapCheck: state.step }, '');
         return;
       }
-      if ((target === 'details' || target === 'expert') && !state.vins.length) target = 'vins';
+
+      // Leaving a success screen starts over on step 1.
+      if (TERMINAL[state.step]) {
+        if (TERMINAL[key]) return;
+        state.history = [];
+        goTo('vins', { isBack: true });
+        replaceEntry('vins');
+        return;
+      }
+
+      // A success screen is never shown again from history (nothing was sent).
+      if (TERMINAL[key]) { replaceEntry(state.step); return; }
+
+      var target = key;
+      var stale = state.inputVersion !== state.vinsVersion;
+      if (target === 'details' && (!state.vins.length || stale)) target = 'vins';
+      if (target === 'expert' && state.expertSource === 'over-limit' && stale) target = 'vins';
+      if (target !== key) replaceEntry(target);
+      if (target === state.step) return;
 
       var i = state.history.lastIndexOf(target);
       if (i !== -1) state.history = state.history.slice(0, i);  // back
@@ -723,28 +921,141 @@
 
     function back() {
       if (!state.history.length || state.busy) return;
-      goTo(state.history.pop(), { isBack: true });
-      // Keep the browser history in step with the form.
+      var from = state.step;
+      var to = state.history.pop();
+      goTo(to, { isBack: true });
+      // Keep the browser history in step with the form. If the current entry
+      // isn't ours (the user followed a #section link), going back would land
+      // somewhere else, so the entry is just relabeled.
       if (useHistory) {
-        ignoreNextPop = true;
-        root.history.back();
+        var current = expectedPops.length
+          ? expectedPops[expectedPops.length - 1]
+          : root.history.state && root.history.state.motorqCapCheck;
+        if (current === from) {
+          expectedPops.push(to);
+          root.history.back();
+        } else {
+          replaceEntry(to);
+        }
       }
     }
 
-    /* ----- Step 1: VINs ----- */
+    // Any change to the step 1 input (file, text or tab).
+    function inputChanged() {
+      state.inputVersion++;
+    }
+
+    /* ----- Step 1: tabs ----- */
+
+    function tabName(node) {
+      return node.getAttribute('data-tab');
+    }
+
+    // Only one input mode is active. Switching keeps what was entered in the
+    // other tab, but only the active tab is ever sent.
+    function setTab(name) {
+      if (!tabs.length) return;
+      if (state.tab !== name) inputChanged();
+      state.tab = name;
+      tabs.forEach(function (t) {
+        var active = tabName(t) === name;
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
+        if (t.classList) t.classList.toggle(activeClass, active);
+      });
+      panels.forEach(function (p) {
+        var active = p.getAttribute('data-panel') === name;
+        setVisible(p, active);
+        if (p.classList) p.classList.toggle(activeClass, active);
+      });
+      showError(el.vinsError, '');
+      renderLive();
+      refreshVinsButton();
+    }
+
+    // 'upload' or 'paste'. Without tabs, a selected file wins over pasted text.
+    function activeMode() {
+      if (state.tab) return state.tab;
+      return state.selectedFile ? 'upload' : 'paste';
+    }
+
+    /* ----- Step 1: live VIN count ----- */
+
+    function parseFileLive(file) {
+      var entry = { file: file, result: null, promise: null };
+      entry.promise = V.processFile(file).then(function (result) {
+        entry.result = result;
+        if (state.live.file === entry) renderLive();
+        return result;
+      });
+      state.live.file = entry;
+      return entry.promise;
+    }
+
+    function parseTextLive() {
+      clearTimeout(liveTimer);
+      liveTimer = null;
+      var value = el.textarea ? el.textarea.value : '';
+      state.live.text = value.trim() ? { value: value, result: V.processText(value) } : null;
+      renderLive();
+      return state.live.text;
+    }
+
+    function scheduleTextLive() {
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(parseTextLive, LIVE_COUNT_DELAY);
+    }
+
+    // Shows "N VINs found" for the active input. Invalid or empty input hides
+    // the count; errors only appear after pressing the button.
+    function renderLive() {
+      var entry = activeMode() === 'upload' ? state.live.file : state.live.text;
+      var result = entry && entry.result;
+      if (result && result.ok) setCount(result.count);
+      $$(sel.vinsFound).forEach(function (n) { setVisible(n, !!(result && result.ok)); });
+    }
+
+    function setCount(count) {
+      $$(sel.vinCount).forEach(function (n) { n.textContent = count.toLocaleString('en-US'); });
+    }
+
+    /* ----- Step 1: inputs and submit ----- */
 
     function refreshVinsButton() {
-      var hasContent = !!state.selectedFile || !!(el.textarea && el.textarea.value.trim());
+      var mode = activeMode();
+      var hasFile = !!state.selectedFile;
+      var hasText = !!(el.textarea && el.textarea.value.trim());
+      var hasContent = state.tab ? (mode === 'upload' ? hasFile : hasText) : (hasFile || hasText);
       setDisabled(el.vinsSubmit, !hasContent || state.busy);
     }
 
     function setFile(file) {
       state.selectedFile = file || null;
       state.vinsJob++;
+      inputChanged();
       if (el.fileName) el.fileName.textContent = file ? file.name : '';
       if (el.fileClear) el.fileClear.hidden = !file;
       if (!file && el.fileInput) el.fileInput.value = '';
+      if (file) parseFileLive(file);
+      else state.live.file = null;
       showError(el.vinsError, '');
+      renderLive();
+      refreshVinsButton();
+    }
+
+    function clearText() {
+      if (el.textarea) el.textarea.value = '';
+      clearTimeout(liveTimer);
+      state.live.text = null;
+      state.vinsJob++;
+      onTextChanged();
+      if (el.textarea && typeof el.textarea.focus === 'function') el.textarea.focus();
+    }
+
+    function onTextChanged() {
+      inputChanged();
+      showError(el.vinsError, '');
+      if (el.textClear) el.textClear.hidden = !(el.textarea && el.textarea.value);
+      renderLive();
       refreshVinsButton();
     }
 
@@ -755,22 +1066,39 @@
       setBusy(true);
       var jobId = ++state.vinsJob;
 
-      // Use the selected file if there is one; otherwise, the pasted text.
-      var job = state.selectedFile
-        ? V.processFile(state.selectedFile)
-        : Promise.resolve(V.processText(el.textarea ? el.textarea.value : ''));
+      // Only the active tab is used. The live result is reused when it is
+      // still current, so the input isn't parsed twice.
+      var job;
+      if (activeMode() === 'upload') {
+        var file = state.selectedFile;
+        var live = state.live.file;
+        if (!file) job = Promise.resolve({ ok: false, error: V.ERRORS.NO_VINS });
+        else job = live && live.file === file ? live.promise : parseFileLive(file);
+      } else {
+        var text = el.textarea ? el.textarea.value : '';
+        var liveText = state.live.text;
+        var entry = liveText && liveText.value === text && !liveTimer ? liveText : parseTextLive();
+        job = Promise.resolve(entry ? entry.result : V.processText(text));
+      }
 
       return job.then(function (result) {
         setBusy(false);
-        // The file was removed or replaced while it was being read: ignore it.
+        // The input was removed or replaced while it was being read: ignore it.
         if (jobId !== state.vinsJob) return { ok: false, discarded: true };
         if (!result.ok) {
           showError(el.vinsError, msg[result.error] || msg.server);
           return result;
         }
         state.vins = result.vins;
-        $$(sel.vinCount).forEach(function (n) { n.textContent = result.count.toLocaleString('en-US'); });
-        goTo(result.needsExpert ? 'expert' : 'details');
+        state.vinsVersion = state.inputVersion;
+        setCount(result.count);
+        if (result.needsExpert) {
+          state.expertSource = 'over-limit';
+          state.expertFrom = 'vins';
+          goTo('expert');
+        } else {
+          goTo('details');
+        }
         return result;
       });
     }
@@ -780,8 +1108,10 @@
     function submitDetails() {
       if (state.busy) return Promise.resolve();
       showError(el.detailsError, '');
-      var fullName = (el.fullName && el.fullName.value || '').trim();
-      if (!fullName) return Promise.resolve(showError(el.detailsError, msg.name_required));
+      var first = value(el.firstName);
+      if (!first) return Promise.resolve(showError(el.detailsError, msg.first_name_required));
+      var last = value(el.lastName);
+      if (!last) return Promise.resolve(showError(el.detailsError, msg.last_name_required));
 
       var emailCheck = E.validateWorkEmail(el.email && el.email.value);
       if (!emailCheck.ok) return Promise.resolve(showError(el.detailsError, msg[emailCheck.error]));
@@ -793,7 +1123,7 @@
       if (!token) return Promise.resolve(showError(el.detailsError, msg.captcha));
 
       var payload = {
-        fullName: fullName,
+        fullName: C.joinName(first, last),
         email: emailCheck.email,
         vins: V.toApiString(state.vins),
         turnstileToken: token,
@@ -802,34 +1132,78 @@
       setBusy(true);
       return callSubmit(config.submitCheck, payload).then(function () {
         setBusy(false);
+        // The token is spent: a new submit needs a new verification.
+        resetTurnstile(config.resetTurnstile, true);
         goTo('success');
       }).catch(function (err) {
         setBusy(false);
-        resetTurnstile();
+        resetTurnstile(config.resetTurnstile, true);
         showError(el.detailsError, (err && err.userMessage) || msg.server);
         if (config.onError) config.onError(err);
       });
     }
 
-    /* ----- More than 1,000 VINs: Talk to an Expert ----- */
+    /* ----- Talk to an Expert ----- */
+
+    // From the link under the form (step 1 or 2), with or without VINs.
+    function openExpert() {
+      if (state.busy || state.step === 'expert') return;
+      state.expertSource = 'link';
+      state.expertFrom = state.step;
+      goTo('expert');
+    }
+
+    // VINs the user has loaded: the processed ones, or (from step 1) the live
+    // count of the active input.
+    function currentVinCount() {
+      if (state.expertSource === 'over-limit' || state.expertFrom === 'details') {
+        return state.vins.length || null;
+      }
+      var entry = activeMode() === 'upload' ? state.live.file : state.live.text;
+      return entry && entry.result && entry.result.ok ? entry.result.count : null;
+    }
 
     function submitExpert() {
       if (state.busy) return Promise.resolve();
       showError(el.expertError, '');
-      var name = (el.expertName && el.expertName.value || '').trim();
-      if (!name) return Promise.resolve(showError(el.expertError, msg.name_required));
+      var fail = function (key) { return Promise.resolve(showError(el.expertError, msg[key])); };
 
-      var emailCheck = E.validateWorkEmail(el.expertEmail && el.expertEmail.value);
-      if (!emailCheck.ok) return Promise.resolve(showError(el.expertError, msg[emailCheck.error]));
+      var fleetSize = value(el.fleetSize);
+      if (!fleetSize) return fail('fleet_size_required');
+      var companyName = value(el.companyName);
+      if (!companyName) return fail('company_name_required');
+      var emailCheck = E.validateWorkEmail(el.companyEmail && el.companyEmail.value);
+      if (!emailCheck.ok) return fail(emailCheck.error);
+      var country = value(el.phoneCountry);
+      if (!country) return fail('phone_country_required');
+      var phoneCheck = C.validatePhone(el.phone && el.phone.value);
+      if (!phoneCheck.ok) return fail(phoneCheck.error);
 
-      var payload = { fullName: name, email: emailCheck.email, vinCount: state.vins.length };
+      var payload = {
+        fleetSize: fleetSize,
+        companyName: companyName,
+        email: emailCheck.email,
+        phone: country + ' ' + phoneCheck.phone,
+        source: state.expertSource || 'link',
+      };
+      var vinCount = currentVinCount();
+      if (vinCount) payload.vinCount = vinCount;
+
+      // Optional: HubSpot can't verify it, so it never blocks the submit.
+      var token = '';
+      try {
+        token = config.getExpertTurnstileToken ? config.getExpertTurnstileToken() : '';
+      } catch (e) { /* not loaded */ }
+      if (token) payload.turnstileToken = token;
 
       setBusy(true);
       return callSubmit(config.submitExpert, payload).then(function () {
         setBusy(false);
+        resetTurnstile(config.resetExpertTurnstile, false);
         goTo('expertSuccess');
       }).catch(function (err) {
         setBusy(false);
+        resetTurnstile(config.resetExpertTurnstile, false);
         showError(el.expertError, (err && err.userMessage) || msg.server);
         if (config.onError) config.onError(err);
       });
@@ -839,17 +1213,21 @@
 
     // Runs a submit function. A thrown error, a rejection, no answer within
     // timeoutMs or an HTTP status outside successStatuses all end up as a
-    // rejected promise.
+    // rejected promise. The function gets { signal } as its second argument:
+    // passing it to fetch() cancels the request on timeout, so a late answer
+    // can't create a second lead when the user retries.
     function callSubmit(fn, payload) {
+      var controller = typeof AbortController === 'function' ? new AbortController() : null;
       return new Promise(function (resolve, reject) {
-        var timer = setTimeout(function () {
+        var timer = useTimeout ? setTimeout(function () {
+          if (controller) controller.abort();
           var err = new Error('Request timed out');
           err.timeout = true;
           reject(err);
-        }, timeoutMs);
+        }, timeoutMs) : null;
         new Promise(function (res) {
           if (typeof fn !== 'function') throw new Error('Submit function is not configured');
-          res(fn(payload));
+          res(fn(payload, { signal: controller ? controller.signal : undefined }));
         }).then(
           function (res) { clearTimeout(timer); resolve(res); },
           function (err) { clearTimeout(timer); reject(err); }
@@ -866,11 +1244,37 @@
     }
 
     // Turnstile tokens can only be used once: get a new one after a failure.
-    function resetTurnstile() {
+    // The step 2 widget falls back to window.turnstile.reset().
+    function resetTurnstile(customReset, useGlobal) {
       try {
-        if (config.resetTurnstile) config.resetTurnstile();
-        else if (root.turnstile && typeof root.turnstile.reset === 'function') root.turnstile.reset();
+        if (customReset) customReset();
+        else if (useGlobal && root.turnstile && typeof root.turnstile.reset === 'function') root.turnstile.reset();
       } catch (e) { /* a broken widget must not hide the error message */ }
+    }
+
+    function value(node) {
+      return (node && node.value || '').trim();
+    }
+
+    // Fills a <select> with the configured options, unless the markup already
+    // has real options (more than a placeholder).
+    function fillSelect(select, options) {
+      if (!select || !select.options || typeof document === 'undefined') return;
+      if (select.options.length > 1) return;
+      options.forEach(function (opt) {
+        var o = document.createElement('option');
+        o.value = typeof opt === 'string' ? opt : opt.value;
+        o.textContent = typeof opt === 'string' ? opt : opt.label;
+        select.appendChild(o);
+      });
+    }
+
+    // Site CSS (e.g. a Webflow class with display:flex) can override the
+    // hidden attribute, so the inline style is set as well.
+    function setVisible(node, visible) {
+      if (!node) return;
+      node.hidden = !visible;
+      if (node.style) node.style.display = visible ? '' : 'none';
     }
 
     function showError(node, text) {
@@ -898,7 +1302,10 @@
     }
 
     function getState() {
-      return { step: state.step, vinCount: state.vins.length, vins: state.vins.slice() };
+      return {
+        step: state.step, tab: activeMode(), vinCount: state.vins.length, vins: state.vins.slice(),
+        expertSource: state.expertSource,
+      };
     }
 
     /* ----- Events ----- */
@@ -908,17 +1315,21 @@
     }
     function prevent(fn) { return function (e) { e.preventDefault(); fn(); }; }
 
+    tabs.forEach(function (t) { on(t, 'click', prevent(function () { setTab(tabName(t)); })); });
     on(el.fileInput, 'change', function () { setFile(el.fileInput.files[0]); });
     on(el.fileClear, 'click', prevent(function () { setFile(null); }));
-    on(el.textarea, 'input', function () { showError(el.vinsError, ''); refreshVinsButton(); });
+    on(el.textClear, 'click', prevent(clearText));
+    on(el.textarea, 'input', function () { onTextChanged(); scheduleTextLive(); });
     // Paste doesn't read the clipboard: it moves focus to the text field so the
     // user pastes there themselves (on mobile this opens the keyboard).
     on(el.pasteButton, 'click', prevent(function () {
+      if (tabs.length) setTab('paste');
       if (el.textarea && typeof el.textarea.focus === 'function') el.textarea.focus();
     }));
     on(el.vinsSubmit, 'click', prevent(submitVins));
     on(el.detailsSubmit, 'click', prevent(submitDetails));
     on(el.expertSubmit, 'click', prevent(submitExpert));
+    $$(sel.openExpert).forEach(function (a) { on(a, 'click', prevent(openExpert)); });
     $$(sel.back).forEach(function (b) { on(b, 'click', prevent(back)); });
 
     // Error messages are announced by screen readers.
@@ -938,6 +1349,8 @@
     on(container, 'keydown', function (e) {
       var t = e.target;
       if (e.key !== 'Enter' || !t || t.tagName !== 'INPUT') return;
+      // Enter that confirms a Japanese/Chinese/Korean input candidate.
+      if (e.isComposing || e.keyCode === 229) return;
       if (/^(checkbox|radio|file|button|submit)$/i.test(t.type)) return;
       e.preventDefault();
       if (state.step === 'details') submitDetails();
@@ -950,12 +1363,27 @@
       e.stopPropagation();
     });
 
-    if (useHistory) root.addEventListener('popstate', onPopState);
+    if (useHistory) {
+      root.addEventListener('popstate', onPopState);
+      // After a reload the entry may still say "details" or "success": the
+      // form always starts on step 1.
+      replaceEntry('vins');
+    }
+
+    fillSelect(el.fleetSize, config.fleetSizes || C.FLEET_SIZES);
+    fillSelect(el.phoneCountry, config.phoneCountries || C.PHONE_COUNTRIES);
+
+    // Initial tab: the one marked aria-selected="true", or the first one.
+    if (tabs.length) {
+      var selected = tabs.filter(function (t) { return t.getAttribute('aria-selected') === 'true'; })[0];
+      setTab(tabName(selected || tabs[0]));
+    }
 
     goTo('vins', { isBack: true, initial: true });
+    renderLive();
     refreshVinsButton();
 
-    return { getState: getState, goTo: goTo, back: back };
+    return { getState: getState, goTo: goTo, back: back, setTab: setTab, openExpert: openExpert };
   }
 
   function merge(base, extra) {
@@ -964,5 +1392,5 @@
     return out;
   }
 
-  root.MotorqCapCheck = { init: init, MESSAGES: MESSAGES };
+  root.MotorqCapCheck = { init: init, MESSAGES: MESSAGES, LIVE_COUNT_DELAY: LIVE_COUNT_DELAY };
 })(window);

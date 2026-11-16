@@ -53,13 +53,19 @@ const payload = (page) => page.evaluate(() => {
   return JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
 });
 
+// Upload File and Paste VINs are tabs; Upload is the default one.
+const pasteTab = (page) => page.click('[data-tab="paste"]');
+
 async function pasteAndContinue(page, text) {
+  await pasteTab(page);
   await page.fill('[data-field="vins-text"]', text);
   await page.click('[data-action="vins-submit"]');
 }
 
 async function fillDetails(page, { name = 'Jane Doe', email = 'jane@acme.com', captcha = true } = {}) {
-  await page.fill('[data-field="full-name"]', name);
+  const [first, ...rest] = name.split(' ');
+  await page.fill('[data-field="first-name"]', first);
+  await page.fill('[data-field="last-name"]', rest.join(' ') || 'Doe');
   await page.fill('[data-field="email"]', email);
   if (captcha) await page.check('#mock-turnstile');
 }
@@ -111,7 +117,8 @@ test('HOLDS [Req 10/12] API failure keeps the user on step 2 with their data; Ba
   await page.click('[data-action="details-submit"]');
   await page.waitForSelector('[data-error="details"]:not([hidden])');
   assert.strictEqual(await step(page), 'details');
-  assert.strictEqual(await page.inputValue('[data-field="full-name"]'), 'Jane Doe');
+  assert.strictEqual(await page.inputValue('[data-field="first-name"]'), 'Jane');
+  assert.strictEqual(await page.inputValue('[data-field="last-name"]'), 'Doe');
   assert.strictEqual(await page.inputValue('[data-field="email"]'), 'jane@acme.com');
   await page.click('[data-step="details"] [data-action="back"]');
   assert.strictEqual(await step(page), 'vins');
@@ -119,7 +126,7 @@ test('HOLDS [Req 10/12] API failure keeps the user on step 2 with their data; Ba
   await context.close();
 });
 
-test('HOLDS [Req 8] double-clicking "Get My Results" sends one request', async () => {
+test('HOLDS [Req 8] double-clicking "Email My Results" sends one request', async () => {
   const { page, context } = await open();
   await pasteAndContinue(page, A);
   await fillDetails(page);
@@ -177,7 +184,7 @@ test('HOLDS [Req 6] a ~20 MB CSV (1.2M VINs) is processed in the browser and rou
   await page.click('[data-action="vins-submit"]');
   await page.waitForFunction(() => document.getElementById('t-step').textContent === 'expert', null, { timeout: 60000 });
   console.log(`# 20 MB CSV processed in ${Date.now() - t0} ms`);
-  assert.strictEqual(await page.textContent('[data-step="expert"] [data-vin-count]'), '1,200,000');
+  assert.strictEqual(await page.textContent('[data-step="vins"] [data-vin-count]'), '1,200,000');
   await context.close();
 });
 
@@ -185,16 +192,19 @@ test('HOLDS [layout] mobile viewport (375px): no horizontal scroll, Paste button
   const { page, context } = await open({ viewport: { width: 375, height: 740 }, isMobile: true, hasTouch: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `horizontal overflow ${overflow}px`);
+  await page.tap('[data-tab="paste"]');
   assert.ok(await page.isVisible('[data-action="paste"]'));
   await context.close();
 });
 
 test('HOLDS [a11y] keyboard-only: step 1 can be completed with Tab + Enter', async () => {
   const { page, context } = await open();
+  await pasteTab(page);
   await page.focus('[data-field="vins-text"]');
   await page.keyboard.type(A);
   await page.keyboard.press('Tab'); // Paste
-  await page.keyboard.press('Tab'); // Continue
+  await page.keyboard.press('Tab'); // Clear
+  await page.keyboard.press('Tab'); // Get My Results
   assert.strictEqual(await page.evaluate(() => document.activeElement.dataset.action), 'vins-submit');
   await page.keyboard.press('Enter');
   assert.strictEqual(await step(page), 'details');
@@ -235,13 +245,13 @@ test('F12 [Req 2, Needs decision] an .xls renamed to .xlsx is rejected', async (
   await context.close();
 });
 
-// Decision (16/11): when there is a file and pasted text, the file wins.
-test('F16 [Req 1, decided] uploading a file AND pasting text uses the file', async () => {
+// Decision (Figma flow): Upload and Paste are tabs; only the active tab is sent.
+test('F16 [Req 1, decided] uploading a file AND pasting text uses the active tab (Paste)', async () => {
   const { page, context } = await open();
   await page.setInputFiles('[data-field="file"]', { name: 'fleet.csv', mimeType: 'text/csv', buffer: Buffer.from(`VIN\n${A}\n`) });
   await pasteAndContinue(page, `${B}\n${C}`);
   await page.waitForFunction(() => document.getElementById('t-step').textContent === 'details');
-  assert.strictEqual(await page.textContent('[data-step="details"] [data-vin-count]'), '1');
+  assert.strictEqual(await page.textContent('[data-step="details"] [data-vin-count]'), '2');
   await context.close();
 });
 
@@ -263,6 +273,7 @@ test('F01/F02 [Req 12] an API error keeps the user on step 2 and the retry gets 
 
 test('F23 [a11y] after Continue, keyboard focus moves into step 2 (not lost on a hidden button)', async () => {
   const { page, context } = await open();
+  await pasteTab(page);
   await page.focus('[data-field="vins-text"]');
   await page.keyboard.type(A);
   await page.focus('[data-action="vins-submit"]');

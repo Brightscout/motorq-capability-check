@@ -8,7 +8,7 @@ const root = __dirname;
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const pkg = JSON.parse(read('package.json'));
 
-const SOURCES = ['src/vin-parser.js', 'src/email-check.js', 'src/form-controller.js'];
+const SOURCES = ['src/vin-parser.js', 'src/email-check.js', 'src/contact-check.js', 'src/form-controller.js'];
 
 const banner = `/*! Motorq Capability Check v${pkg.version} | Brightscout */\n`;
 const bundle = banner + SOURCES.map((f) => `/* ${f} */\n${read(f)}`).join('\n');
@@ -18,6 +18,7 @@ const testForm = read('test/test-form.template.html')
   .replace('/*__XLSX__*/', () => inline(read('node_modules/xlsx/dist/xlsx.full.min.js')))
   .replace('/*__VIN_PARSER__*/', () => inline(read('src/vin-parser.js')))
   .replace('/*__EMAIL_CHECK__*/', () => inline(read('src/email-check.js')))
+  .replace('/*__CONTACT_CHECK__*/', () => inline(read('src/contact-check.js')))
   .replace('/*__FORM_CONTROLLER__*/', () => inline(read('src/form-controller.js')));
 
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });

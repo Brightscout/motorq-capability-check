@@ -105,3 +105,34 @@ test('processFile: reads CSV and TXT', async () => {
   const r = await V.processFile(file);
   assert.deepStrictEqual(r.vins, [A, B]);
 });
+
+/* Regressions found in the v1.2.0 review */
+
+test('no real VIN: dates, models and notes in other columns do not make the input invalid', () => {
+  assert.deepStrictEqual(V.processText('Unit,VIN,Purchased\n1,JH4DA935XMS00001,01/02/2020').vins, ['JH4DA935XMS00001']);
+  assert.deepStrictEqual(V.processText('VIN,Notes\nJH4DA935XMS00001,Bumper damaged.').vins, ['JH4DA935XMS00001']);
+  assert.strictEqual(V.processText('Make,Model,Year\nFord,F-150,2019').error, V.ERRORS.NO_VINS);
+});
+
+test('no real VIN: a VIN-like value with a stray character is still invalid', () => {
+  const r = V.processText('JH4DA935XMS0000;1');
+  assert.strictEqual(r.error, V.ERRORS.INVALID_INPUT);
+  assert.deepStrictEqual(r.invalidChars, [';']);
+});
+
+test('VINs across one row: the unit number or plate on the left is not sent', () => {
+  assert.deepStrictEqual(V.processText(`Unit,VIN,Trailer VIN\nTRK1001,${A},${B}`).vins, [A, B]);
+  assert.deepStrictEqual(V.processText(`TRK1001\t${A}\t${B}`).vins, [A, B]);
+  assert.deepStrictEqual(V.processText(`Plate,VIN,Old VIN\nABC1234,${A},${B}`).vins, [A, B]);
+  // A mistyped VIN on the left is still kept.
+  assert.deepStrictEqual(V.processText(`1G1AZ37DXXX00001,${A},${B}`).vins, ['1G1AZ37DXXX00001', A, B]);
+});
+
+test('a stray tab in a CSV does not switch it to tab-separated', () => {
+  const r = V.processText(`Unit,VIN,Phone\n1,${A},18005551234\n2,${B},18005551235\t`);
+  assert.deepStrictEqual(r.vins, [A, B]);
+});
+
+test('copy from Excel with commas inside cells is still tab-separated', () => {
+  assert.deepStrictEqual(V.processText(`Name\tVIN\nSmith, John\t${A}\nDoe, Jane\t${B}`).vins, [A, B]);
+});

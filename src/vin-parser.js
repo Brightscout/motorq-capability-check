@@ -87,11 +87,12 @@
 
   /**
    * Splits text into rows and cells like a spreadsheet would. Tabs are the
-   * column separator if there are any (copy from Excel), commas otherwise
-   * (CSV). Quoted cells may contain separators, line breaks and "" quotes.
+   * column separator when most lines have them (copy from Excel), commas
+   * otherwise (CSV, even with a stray tab). Quoted cells may contain
+   * separators, line breaks and "" quotes.
    */
   function parseDelimited(text) {
-    var delimiter = text.indexOf('\t') !== -1 ? '\t' : ',';
+    var delimiter = chooseDelimiter(text);
     // No quotes (the usual case): a plain split is much faster on big files.
     if (text.indexOf('"') === -1) {
       return text.split('\n').map(function (line) {
@@ -101,6 +102,18 @@
     var rows = parseWith(text, delimiter, true);
     // An unclosed quote: read the text again treating quotes as plain characters.
     return rows || parseWith(text, delimiter, false);
+  }
+
+  function chooseDelimiter(text) {
+    if (text.indexOf('\t') === -1) return ',';
+    if (text.indexOf(',') === -1) return '\t';
+    var tabs = 0;
+    var commas = 0;
+    text.split('\n').forEach(function (line) {
+      if (line.indexOf('\t') !== -1) tabs++;
+      if (line.indexOf(',') !== -1) commas++;
+    });
+    return tabs >= commas ? '\t' : ',';
   }
 
   function parseWith(text, delimiter, useQuotes) {
@@ -164,11 +177,12 @@
     if (anchor) {
       // VINs listed across a row: read the grid sideways.
       var right = countVinsRight(rows, anchor);
-      if (right > 0 && right > countVinsDown(rows, anchor)) {
+      var sideways = right > 0 && right > countVinsDown(rows, anchor);
+      if (sideways) {
         rows = transpose(rows);
         anchor = findAnchor(rows);
       }
-      tokens = tokensFromAnchor(rows, anchor);
+      tokens = tokensFromAnchor(rows, anchor, sideways);
     } else {
       tokens = tokensWithoutAnchor(rows);
     }
@@ -216,12 +230,12 @@
    * Keeps the anchor's column and any other column where most filled cells
    * (from the anchor row down) are VINs, then takes the VINs out of them.
    */
-  function tokensFromAnchor(rows, anchor) {
+  function tokensFromAnchor(rows, anchor, sideways) {
     var cols = selectColumns(rows, anchor);
     var out = [];
     rows.forEach(function (row, r) {
       cols.forEach(function (c) {
-        vinsInCell(row[c], r < anchor.row).forEach(function (t) { out.push(t); });
+        vinsInCell(row[c], r < anchor.row, sideways).forEach(function (t) { out.push(t); });
       });
     });
     return out;
@@ -254,8 +268,10 @@
    * - A cell with one word: a header ("VIN") is skipped. Above the first real
    *   VIN, only something that looks like a VIN is kept (titles are skipped).
    *   Below it, anything else is sent: an invalid VIN is still a VIN.
+   * - Read sideways, "above" is what was left of the first VIN in the row
+   *   (unit numbers, plates), so only long values (11+) are kept there.
    */
-  function vinsInCell(cell, aboveAnchor) {
+  function vinsInCell(cell, aboveAnchor, sideways) {
     var tokens = tokensOf(cell);
     if (!tokens.length) return [];
 
@@ -266,26 +282,54 @@
     var token = tokens[0];
     if (isVin(token)) return [token];
     if (isHeader(cell)) return [];
-    if (aboveAnchor) return VIN_LIKE.test(token) ? [token] : [];
+    if (aboveAnchor) return (sideways ? VIN_LIKE_LONG : VIN_LIKE).test(token) ? [token] : [];
     return [token];
   }
 
   /**
-   * No real VIN anywhere. Characters are still checked, but only values that
-   * look like a VIN are sent, so a sheet with no VINs ("Make, Model, Year")
-   * gives "No VINs detected" instead of sending its words.
+   * No real VIN anywhere (all of them short or mistyped).
+   * - With a VIN header ("VIN", "Vehicle Identification Number"…): only the
+   *   values in those columns, below the header.
+   * - Without one: only values that look like a VIN are sent, so a sheet with
+   *   no VINs ("Make, Model, Year") gives "No VINs detected".
+   * Characters only count in what would be sent, or in values that look like
+   * a VIN with stray characters ("1HGCM82633A00435;2"). Dates, models
+   * ("F-150") and notes in other columns don't make the file invalid.
    */
   function tokensWithoutAnchor(rows) {
     var out = [];
+    var header = findHeader(rows);
+    if (header) {
+      for (var r = header.row + 1; r < rows.length; r++) {
+        header.cols.forEach(function (c) {
+          vinsInCell(rows[r][c], false).forEach(function (t) { out.push(t); });
+        });
+      }
+      return out;
+    }
     rows.forEach(function (row) {
       row.forEach(function (cell) {
-        if (!cell || isHeader(cell)) return;
+        if (!cell) return;
         tokensOf(cell).forEach(function (t) {
-          if (!TOKEN_ALLOWED.test(t) || VIN_LIKE.test(t)) out.push(t);
+          if (VIN_LIKE.test(t) || (!TOKEN_ALLOWED.test(t) && looksLikeBrokenVin(t))) out.push(t);
         });
       });
     });
     return out;
+  }
+
+  /** First row with a VIN header cell, and the columns of those cells. */
+  function findHeader(rows) {
+    for (var r = 0; r < rows.length; r++) {
+      var cols = [];
+      rows[r].forEach(function (cell, c) { if (cell && isHeader(cell)) cols.push(c); });
+      if (cols.length) return { row: r, cols: cols };
+    }
+    return null;
+  }
+
+  function looksLikeBrokenVin(token) {
+    return token.split(/[^A-Za-z0-9]+/).some(function (part) { return VIN_LIKE.test(part); });
   }
 
   /* ---------- Files ---------- */
