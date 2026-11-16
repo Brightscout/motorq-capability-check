@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motorq Capability Check · test form</title>
+<style>
+  :root { --ink:#1b1f24; --muted:#5b6470; --line:#d9dee5; --accent:#2457d6; --err:#c62828; --ok:#1e7d4f; --bg:#f6f7f9; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+  .wrap { max-width:1040px; margin:0 auto; padding:24px 16px 48px; display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:24px; }
+  @media (max-width:860px){ .wrap{ grid-template-columns:1fr; } }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; font-size:14px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:24px; }
+  .card h2 { font-size:18px; margin:0 0 4px; }
+  .card p.lead { color:var(--muted); margin:0 0 16px; font-size:14px; }
+  label { display:block; font-weight:600; font-size:13px; margin:14px 0 6px; }
+  input[type=text], input[type=email], textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  textarea { min-height:120px; font-family:ui-monospace,Menlo,monospace; font-size:13px; resize:vertical; }
+  .drop { border:1.5px dashed var(--line); border-radius:8px; padding:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .drop .name { font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+  .or { text-align:center; color:var(--muted); font-size:12px; margin:12px 0 0; }
+  .row { display:flex; gap:8px; align-items:center; margin-top:18px; flex-wrap:wrap; }
+  button { font:inherit; border-radius:8px; padding:9px 16px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button[aria-busy=true] { opacity:.7; }
+  button.link { border:0; padding:0; background:none; color:var(--accent); text-decoration:underline; }
+  .error { color:var(--err); font-size:13px; margin-top:10px; }
+  .pill { display:inline-block; background:#eef2fb; color:var(--accent); border-radius:999px; padding:2px 10px; font-size:13px; font-weight:600; }
+  .captcha { margin-top:16px; border:1px solid var(--line); border-radius:6px; padding:10px 12px; display:flex; align-items:center; gap:10px; width:fit-content; font-size:14px; }
+  .captcha small { color:var(--muted); margin-left:16px; }
+  .done { text-align:center; padding:24px 0; }
+  .done .check { font-size:36px; color:var(--ok); }
+  aside .card { padding:16px; font-size:13px; }
+  aside h3 { font-size:14px; margin:0 0 8px; }
+  aside .btns { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
+  aside .btns button { font-size:12px; padding:6px 10px; }
+  aside label.inline { display:flex; gap:8px; align-items:center; font-weight:400; margin:6px 0; }
+  pre { background:#0f1720; color:#d6e2f0; border-radius:8px; padding:10px; font-size:11.5px; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all; margin:0; }
+  .state { color:var(--muted); margin-bottom:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <main>
+    <h1>Capability Check · test form</h1>
+    <p class="sub">Real logic (VIN parser, work email check and steps). The Motorq API, Turnstile and HubSpot are mocked.</p>
+
+    <div class="card" id="cap-check">
+      <!-- Step 1: VINs -->
+      <section data-step="vins">
+        <h2>Check your fleet</h2>
+        <p class="lead">Upload a file or paste your VINs.</p>
+        <label>Upload file (.xlsx, .csv, .txt)</label>
+        <div class="drop">
+          <input type="file" accept=".xlsx,.csv,.txt" data-field="file">
+          <span class="name" data-file-name></span>
+          <button class="link" data-action="clear-file" hidden>Remove</button>
+        </div>
+        <p class="or">or</p>
+        <label>Paste VINs</label>
+        <textarea data-field="vins-text" placeholder="1HGCM82633A004352, 5YJSA1E26HF000337"></textarea>
+        <div class="row">
+          <button data-action="paste">Paste</button>
+          <button class="primary" data-action="vins-submit" disabled>Continue</button>
+        </div>
+        <div class="error" data-error="vins" hidden></div>
+      </section>
+
+      <!-- Step 2: contact details -->
+      <section data-step="details" hidden>
+        <h2>Where should we send your results?</h2>
+        <p class="lead"><span class="pill"><span data-vin-count></span> VINs</span> ready to check.</p>
+        <label>Full name</label>
+        <input type="text" data-field="full-name" autocomplete="name">
+        <label>Work email</label>
+        <input type="email" data-field="email" autocomplete="email">
+        <div class="captcha">
+          <input type="checkbox" id="mock-turnstile"> <label for="mock-turnstile" style="margin:0;font-weight:400">Verify you are human</label>
+          <small>Turnstile (mock)</small>
+        </div>
+        <div class="row">
+          <button data-action="back">Back</button>
+          <button class="primary" data-action="details-submit">Get My Results</button>
+        </div>
+        <div class="error" data-error="details" hidden></div>
+      </section>
+
+      <!-- More than 1,000 VINs -->
+      <section data-step="expert" hidden>
+        <h2>A few last details</h2>
+        <p class="lead">You have <span class="pill"><span data-vin-count></span> VINs</span>. For fleets over 1,000, our team will reach out.</p>
+        <label>Full name</label>
+        <input type="text" data-field="expert-name">
+        <label>Company email</label>
+        <input type="email" data-field="expert-email">
+        <div class="row">
+          <button data-action="back">Back</button>
+          <button class="primary" data-action="expert-submit">Talk to an Expert</button>
+        </div>
+        <div class="error" data-error="expert" hidden></div>
+      </section>
+
+      <section data-step="success" hidden>
+        <div class="done"><div class="check">✓</div><h2>You're all set</h2><p class="lead">We'll email your results shortly. It can take up to an hour.</p></div>
+      </section>
+
+      <section data-step="expert-success" hidden>
+        <div class="done"><div class="check">✓</div><h2>Thanks, you're all set</h2><p class="lead">Our team will be in touch soon.</p></div>
+      </section>
+    </div>
+  </main>
+
+  <aside>
+    <div class="card">
+      <h3>Test panel</h3>
+      <div class="state">Current step: <b id="t-step">vins</b> · VINs in memory: <b id="t-count">0</b></div>
+
+      <h3>Load samples</h3>
+      <div class="btns">
+        <button data-sample="ok">3 VINs + header</button>
+        <button data-sample="dupes">With duplicates</button>
+        <button data-sample="invalid">Invalid character</button>
+        <button data-sample="empty">Header only</button>
+        <button data-sample="1000">1,000 VINs</button>
+        <button data-sample="1001">1,001 VINs</button>
+      </div>
+
+      <h3>Download test files</h3>
+      <div class="btns">
+        <button data-download="xlsx">.xlsx with columns</button>
+        <button data-download="xlsx-big">.xlsx 1,500 VINs</button>
+        <button data-download="csv">.csv</button>
+      </div>
+
+      <h3>Mock response</h3>
+      <label class="inline"><input type="checkbox" id="t-fail"> API returns an error</label>
+      <label class="inline"><input type="checkbox" id="t-reset" checked> Reset after success</label>
+
+      <h3 style="margin-top:12px">Last request</h3>
+      <pre id="t-log">—</pre>
+    </div>
+  </aside>
+</div>
+
+<script>/*__XLSX__*/</script>
+<script>/*__VIN_PARSER__*/</script>
+<script>/*__EMAIL_CHECK__*/</script>
+<script>/*__FORM_CONTROLLER__*/</script>
+<script>
+(function () {
+  var log = document.getElementById('t-log');
+  var A = ['1HGCM82633A004352', '5YJSA1E26HF000337', 'WVWZZZ1JZXW000001'];
+
+  function fakeVins(n) {
+    var out = [];
+    for (var i = 0; i < n; i++) out.push('TEST' + String(i).padStart(13, '0'));
+    return out;
+  }
+
+  function mockRequest(target, payload) {
+    var shown = Object.assign({}, payload);
+    if (shown.vins && shown.vins.length > 160) shown.vins = shown.vins.slice(0, 160) + '… (' + shown.vins.length + ' chars)';
+    log.textContent = 'POST ' + target + '\n' + JSON.stringify(shown, null, 2);
+    return new Promise(function (resolve, reject) {
+      setTimeout(function () {
+        if (document.getElementById('t-fail').checked) {
+          log.textContent += '\n\n→ 500 (mock)';
+          reject(new Error('mock 500'));
+        } else {
+          log.textContent += '\n\n→ 202 Accepted (mock)';
+          resolve();
+          if (document.getElementById('t-reset').checked) setTimeout(function () { location.reload(); }, 2500);
+        }
+      }, 700);
+    });
+  }
+
+  var form = MotorqCapCheck.init({
+    root: '#cap-check',
+    getTurnstileToken: function () {
+      return document.getElementById('mock-turnstile').checked ? 'mock-turnstile-token' : '';
+    },
+    submitCheck: function (p) { return mockRequest('Motorq API', p); },
+    submitExpert: function (p) { return mockRequest('HubSpot Forms API', p); },
+    onStep: function (step, s) {
+      document.getElementById('t-step').textContent = step;
+      document.getElementById('t-count').textContent = s.vinCount;
+    },
+  });
+
+  var samples = {
+    ok: 'VIN\n' + A.join('\n'),
+    dupes: A.concat([A[0], A[1].toLowerCase()]).join(', '),
+    invalid: A[0] + ';' + A[1],
+    empty: 'VIN\n\n',
+    '1000': fakeVins(1000).join('\n'),
+    '1001': fakeVins(1001).join('\n'),
+  };
+
+  document.querySelectorAll('[data-sample]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (form.getState().step !== 'vins') return;
+      var clear = document.querySelector('[data-action="clear-file"]');
+      if (!clear.hidden) clear.click();
+      var ta = document.querySelector('[data-field="vins-text"]');
+      ta.value = samples[b.dataset.sample];
+      ta.dispatchEvent(new Event('input'));
+    });
+  });
+
+  function download(name, blob) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  function xlsxBlob(rows) {
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Fleet');
+    var buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
+  document.querySelectorAll('[data-download]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var kind = b.dataset.download;
+      if (kind === 'xlsx') {
+        download('fleet-columns.xlsx', xlsxBlob([
+          ['Make', 'VIN', 'Model'],
+          ['Honda', A[0], 'Accord-EX'],
+          ['Tesla', A[1], 'Model S'],
+          ['', '', ''],
+          ['VW', A[2], 'Golf'],
+          ['Honda', A[0], 'Accord-EX'],
+        ]));
+      } else if (kind === 'xlsx-big') {
+        download('fleet-1500.xlsx', xlsxBlob([['VIN']].concat(fakeVins(1500).map(function (v) { return [v]; }))));
+      } else {
+        download('fleet.csv', new Blob(['﻿VIN\r\n' + A.join('\r\n') + '\r\n'], { type: 'text/csv' }));
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

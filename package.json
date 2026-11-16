@@ -1,0 +1,14 @@
+{
+  "name": "motorq-capability-check",
+  "version": "1.0.0",
+  "description": "Front-end logic for the Motorq Capability Check form",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build": "node build.js"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "xlsx": "^0.18.5"
+  }
+}
