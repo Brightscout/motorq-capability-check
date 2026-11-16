@@ -1,6 +1,6 @@
 {
   "name": "motorq-capability-check",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Front-end logic for the Motorq Capability Check form",
   "scripts": {
     "test": "node --test test/*.test.js",

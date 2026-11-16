@@ -13,6 +13,8 @@
  *     submitExpert: function (payload) { return fetch(...) },  // HubSpot Forms API
  *     getTurnstileToken: function () { return turnstile.getResponse() },
  *     resetTurnstile: function () { turnstile.reset() },       // optional
+ *     timeoutMs: 30000,                                        // optional
+ *     history: true,                                           // optional
  *   });
  *
  * Submit functions return a promise. If it resolves with an object that has a
@@ -76,12 +78,21 @@
     var sel = merge(DEFAULT_SELECTORS, config.selectors || {});
     var msg = Object.assign({}, MESSAGES, config.messages || {});
     var successStatuses = config.successStatuses || [200, 202];
+    var timeoutMs = config.timeoutMs || 30000;
     var container = typeof config.root === 'string' ? document.querySelector(config.root) : config.root;
     var $ = function (s) { return container.querySelector(s); };
     var $$ = function (s) { return Array.prototype.slice.call(container.querySelectorAll(s)); };
 
+    // Each step gets a browser history entry, so the browser's Back button (or
+    // Android's back gesture) goes to the previous step instead of leaving the page.
+    var useHistory = config.history !== false && !!root.history &&
+      typeof root.history.pushState === 'function' && typeof root.addEventListener === 'function';
+    var ignoreNextPop = false;
+
     // State. VINs live here, in memory, across steps.
-    var state = { step: 'vins', history: [], vins: [], selectedFile: null, busy: false };
+    // vinsJob: increases when the input changes, so a slow file read that is
+    // no longer current gets discarded.
+    var state = { step: 'vins', history: [], vins: [], selectedFile: null, busy: false, vinsJob: 0 };
 
     var el = {
       fileInput: $(sel.fileInput), fileName: $(sel.fileName), fileClear: $(sel.fileClear),
@@ -109,7 +120,28 @@
         if (node.style) node.style.display = hide ? 'none' : '';
       });
       if (!opts.initial) focusStep($(sel.steps[step]));
+      if (useHistory && !opts.isBack && !opts.initial) {
+        root.history.pushState({ motorqCapCheck: step }, '');
+      }
       if (config.onStep) config.onStep(step, getState());
+    }
+
+    // Browser Back / Forward between our history entries.
+    function onPopState(e) {
+      if (ignoreNextPop) { ignoreNextPop = false; return; }
+      var target = (e.state && e.state.motorqCapCheck) || 'vins';
+      if (target === state.step) return;
+      if (state.busy) {
+        // Mid-submit: stay on this step.
+        root.history.pushState({ motorqCapCheck: state.step }, '');
+        return;
+      }
+      if ((target === 'details' || target === 'expert') && !state.vins.length) target = 'vins';
+
+      var i = state.history.lastIndexOf(target);
+      if (i !== -1) state.history = state.history.slice(0, i);  // back
+      else state.history.push(state.step);                       // forward
+      goTo(target, { isBack: true });
     }
 
     // Moves keyboard focus into the step just shown, so it isn't lost on a
@@ -127,17 +159,23 @@
     function back() {
       if (!state.history.length || state.busy) return;
       goTo(state.history.pop(), { isBack: true });
+      // Keep the browser history in step with the form.
+      if (useHistory) {
+        ignoreNextPop = true;
+        root.history.back();
+      }
     }
 
     /* ----- Step 1: VINs ----- */
 
     function refreshVinsButton() {
       var hasContent = !!state.selectedFile || !!(el.textarea && el.textarea.value.trim());
-      if (el.vinsSubmit) el.vinsSubmit.disabled = !hasContent || state.busy;
+      setDisabled(el.vinsSubmit, !hasContent || state.busy);
     }
 
     function setFile(file) {
       state.selectedFile = file || null;
+      state.vinsJob++;
       if (el.fileName) el.fileName.textContent = file ? file.name : '';
       if (el.fileClear) el.fileClear.hidden = !file;
       if (!file && el.fileInput) el.fileInput.value = '';
@@ -146,8 +184,11 @@
     }
 
     function submitVins() {
+      // Buttons may be links or divs in Webflow, where `disabled` does nothing.
+      if (state.busy) return Promise.resolve();
       showError(el.vinsError, '');
       setBusy(true);
+      var jobId = ++state.vinsJob;
 
       // Use the selected file if there is one; otherwise, the pasted text.
       var job = state.selectedFile
@@ -156,6 +197,8 @@
 
       return job.then(function (result) {
         setBusy(false);
+        // The file was removed or replaced while it was being read: ignore it.
+        if (jobId !== state.vinsJob) return { ok: false, discarded: true };
         if (!result.ok) {
           showError(el.vinsError, msg[result.error] || msg.server);
           return result;
@@ -170,6 +213,7 @@
     /* ----- Step 2: contact details + submit to Motorq ----- */
 
     function submitDetails() {
+      if (state.busy) return Promise.resolve();
       showError(el.detailsError, '');
       var fullName = (el.fullName && el.fullName.value || '').trim();
       if (!fullName) return Promise.resolve(showError(el.detailsError, msg.name_required));
@@ -177,7 +221,10 @@
       var emailCheck = E.validateWorkEmail(el.email && el.email.value);
       if (!emailCheck.ok) return Promise.resolve(showError(el.detailsError, msg[emailCheck.error]));
 
-      var token = config.getTurnstileToken ? config.getTurnstileToken() : '';
+      var token = '';
+      try {
+        token = config.getTurnstileToken ? config.getTurnstileToken() : '';
+      } catch (e) { /* the Turnstile script didn't load (ad blocker, proxy) */ }
       if (!token) return Promise.resolve(showError(el.detailsError, msg.captcha));
 
       var payload = {
@@ -202,6 +249,7 @@
     /* ----- More than 1,000 VINs: Talk to an Expert ----- */
 
     function submitExpert() {
+      if (state.busy) return Promise.resolve();
       showError(el.expertError, '');
       var name = (el.expertName && el.expertName.value || '').trim();
       if (!name) return Promise.resolve(showError(el.expertError, msg.name_required));
@@ -224,12 +272,23 @@
 
     /* ----- Helpers ----- */
 
-    // Runs a submit function. A thrown error, a rejection or an HTTP status
-    // outside successStatuses all end up as a rejected promise.
+    // Runs a submit function. A thrown error, a rejection, no answer within
+    // timeoutMs or an HTTP status outside successStatuses all end up as a
+    // rejected promise.
     function callSubmit(fn, payload) {
-      return new Promise(function (resolve) {
-        if (typeof fn !== 'function') throw new Error('Submit function is not configured');
-        resolve(fn(payload));
+      return new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () {
+          var err = new Error('Request timed out');
+          err.timeout = true;
+          reject(err);
+        }, timeoutMs);
+        new Promise(function (res) {
+          if (typeof fn !== 'function') throw new Error('Submit function is not configured');
+          res(fn(payload));
+        }).then(
+          function (res) { clearTimeout(timer); resolve(res); },
+          function (err) { clearTimeout(timer); reject(err); }
+        );
       }).then(function (res) {
         if (res && typeof res.status === 'number' && successStatuses.indexOf(res.status) === -1) {
           var err = new Error('HTTP ' + res.status);
@@ -260,9 +319,17 @@
       [el.vinsSubmit, el.detailsSubmit, el.expertSubmit].forEach(function (b) {
         if (b) b.setAttribute('aria-busy', busy ? 'true' : 'false');
       });
-      if (el.detailsSubmit) el.detailsSubmit.disabled = busy;
-      if (el.expertSubmit) el.expertSubmit.disabled = busy;
+      setDisabled(el.detailsSubmit, busy);
+      setDisabled(el.expertSubmit, busy);
       refreshVinsButton();
+    }
+
+    // `disabled` only works on real buttons; aria-disabled also tells screen
+    // readers when the "button" is a Webflow link.
+    function setDisabled(node, disabled) {
+      if (!node) return;
+      node.disabled = disabled;
+      node.setAttribute('aria-disabled', disabled ? 'true' : 'false');
     }
 
     function getState() {
@@ -271,7 +338,9 @@
 
     /* ----- Events ----- */
 
-    function on(node, evt, fn) { if (node) node.addEventListener(evt, fn); }
+    function on(node, evt, fn) {
+      if (node && typeof node.addEventListener === 'function') node.addEventListener(evt, fn);
+    }
     function prevent(fn) { return function (e) { e.preventDefault(); fn(); }; }
 
     on(el.fileInput, 'change', function () { setFile(el.fileInput.files[0]); });
@@ -293,6 +362,30 @@
         node.setAttribute('role', 'alert');
       }
     });
+
+    // Inside a <form> (e.g. a Webflow Form Block), a <button> without a type
+    // submits the form, and Enter "clicks" the first one (the hidden Remove
+    // button). Make them plain buttons, handle Enter ourselves and never let
+    // the form post anywhere.
+    $$('button').forEach(function (b) {
+      if (!b.hasAttribute('type')) b.setAttribute('type', 'button');
+    });
+    on(container, 'keydown', function (e) {
+      var t = e.target;
+      if (e.key !== 'Enter' || !t || t.tagName !== 'INPUT') return;
+      if (/^(checkbox|radio|file|button|submit)$/i.test(t.type)) return;
+      e.preventDefault();
+      if (state.step === 'details') submitDetails();
+      else if (state.step === 'expert') submitExpert();
+    });
+    var form = container.tagName === 'FORM' ? container
+      : (typeof container.closest === 'function' ? container.closest('form') : null);
+    on(form, 'submit', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    if (useHistory) root.addEventListener('popstate', onPopState);
 
     goTo('vins', { isBack: true, initial: true });
     refreshVinsButton();

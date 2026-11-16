@@ -46,16 +46,20 @@ Pin a tag (`@v1.0.0`) instead of a branch so jsDelivr serves a fixed version.
 
 ### Submitting
 
-- `submitCheck` and `submitExpert` must return a promise. If it resolves with something that has a numeric `status` (like a `fetch` Response), only `successStatuses` count as success (default `[200, 202]`). Any other status, a rejection or a thrown error shows the error message and keeps the user on the same step with their data.
+- `submitCheck` and `submitExpert` must return a promise. If it resolves with something that has a numeric `status` (like a `fetch` Response), only `successStatuses` count as success (default `[200, 202]`). Any other status, a rejection, a thrown error or no answer within `timeoutMs` (default 30 seconds) shows the error message and keeps the user on the same step with their data.
 - After a failed submit, Turnstile is reset because its tokens can only be used once. It calls `resetTurnstile()` if given, otherwise `window.turnstile.reset()`.
-- `onError(err)` is called on every failure. HTTP failures carry `err.status` and `err.response`.
+- If `getTurnstileToken()` throws (the Turnstile script was blocked), the user sees the verification message instead of a dead button.
+- While a submit is running, clicks on the submit buttons are ignored, so a double click sends one request even when the button is a link (`<a>`) or a `<div>`.
+- `onError(err)` is called on every failure. HTTP failures carry `err.status` and `err.response`; timeouts carry `err.timeout`.
 
 ### Behavior
 
-- If the user selects a file and also types in the text field, the file is used.
+- If the user selects a file and also types in the text field, the file is used. If the file is removed or replaced while it is being read, that result is discarded.
 - The Paste button does not read the clipboard. It moves focus to the text field so the user pastes there.
 - When a step changes, focus moves to its first field. Error messages get `role="alert"` so screen readers announce them.
 - Steps are hidden with the `hidden` attribute and `style.display = 'none'`, so a Webflow class that sets `display` on a step container doesn't show every step at once.
+- Each step adds a browser history entry, so the browser's Back button (and Android's back gesture) returns to the previous step instead of leaving the page. Turn it off with `history: false`.
+- Works inside a `<form>` (Webflow Form Block): buttons without a `type` become `type="button"`, Enter in a step 2 field submits that step, and the form itself never posts. A plain `<div>` is still the simplest container.
 
 ### Markup
 
@@ -96,20 +100,24 @@ Error messages live in `MotorqCapCheck.MESSAGES` and can be overridden through t
 
 ## Parsing rules
 
-- Text, CSV and the first sheet of an `.xlsx` become a grid: one row per line, cells split by commas or tabs. Inside a cell, VINs can also be separated by spaces.
-- **Finding the VINs.** The parser looks for the first real VIN by its pattern (17 letters and numbers, no I, O or Q, at least one digit). From that row down it keeps the VIN's column and any other column where most cells are VINs (so VINs listed across a row work too). Other columns (make, model, notes) are ignored.
-- **Titles and headers.** Rows above the first real VIN are dropped (titles, dates, headers like `VIN #` or `Vehicle Identification Number`), except cells that look like a VIN themselves (11 to 17 letters and numbers with a digit).
-- **No real VIN anywhere** (e.g. all VINs are short or mistyped): every cell is sent, except a header row. If that header has a `VIN` column, only that column is used.
-- Allowed characters in what is sent: letters and numbers. Separators: spaces, commas, tabs and line breaks. Anything else returns `invalid_input`. Characters in ignored columns or title rows don't count.
-- The BOM, zero-width characters and non-breaking spaces (common when copying from the web or Excel Online) are cleaned up.
-- `.xlsx` files are checked by their content: an old `.xls` renamed to `.xlsx` returns `unsupported_file`, and a corrupted file returns `file_read_error`. Numbers in cells are read as plain digits.
+- **Clean-up first.** Full-width letters and digits become normal ones, invisible characters are removed (BOM, zero-width spaces, soft hyphens, direction marks from Outlook or Excel Online), odd spaces become normal spaces, and Cyrillic or Greek letters that look identical to Latin ones (`С`, `Α`…) become Latin.
+- **Grid.** Text, CSV and the `.xlsx` sheet become rows and cells. Tabs separate columns when there are any (copy from Excel); otherwise commas do (CSV). Quoted cells are respected, so `"Model S, Long Range"` or a note with line breaks stays in one cell. Inside a cell, VINs can also be separated by spaces or commas.
+- **Finding the VINs.** The parser looks for the first real VIN by its pattern (17 letters and numbers, no I, O or Q, at least one digit). If there are more VINs to its right than below it, the grid is read sideways. Then it keeps that VIN's column and any other column where most filled cells are only VINs. Other columns (make, model, notes, drivers) are ignored.
+- **Inside the VIN columns:**
+  - A cell with several words (a title, a footer like `Total vehicles: 2`, a row copied from a PDF like `12 Honda Accord <VIN>`) only gives its VINs, including mistyped ones of 11 to 20 characters.
+  - Headers (`VIN`, `VIN #`, `Vehicle Identification Number`…) are skipped wherever they appear, also when repeated further down.
+  - Above the first real VIN, a single value is kept only if it looks like a VIN (5 to 20 letters and numbers with at least one of each), so titles are dropped but `1G1AZ37` is kept.
+  - Below it, any single value is sent: an invalid VIN is still a VIN, as requested by Motorq.
+- **No real VIN anywhere:** only values that look like a VIN are sent. A sheet with no VINs (`Make, Model, Year`) or free text gives `no_vins`.
+- Allowed characters in what is sent: letters and numbers. Anything else returns `invalid_input`. Ignored columns, titles and footers don't count.
+- `.xlsx` files: the first **visible** sheet is read (hidden lookup or template sheets are skipped). Files are checked by their content: an old `.xls` renamed to `.xlsx` returns `unsupported_file`; a corrupted file, or one that was moved or deleted after being selected, returns `file_read_error`. Numbers in cells are read as plain digits.
 - VINs are uppercased and deduplicated (configurable with `CONFIG.DEDUPE`). Invalid VINs inside the VIN columns are still sent, as requested by Motorq.
 - More than 1,000 unique VINs → Talk to an Expert.
 
 ## Work email rules
 
-- Personal email providers are blocked with a short list (`src/email-check.js`), including common disposable addresses. Big providers are also blocked under their country domains (`yahoo.co.uk`, `hotmail.com.ar`…), but not under generic domains companies use (`.io`, `.ai`, `.tv`…).
-- Domains with accented letters (`müller-logistik.de`) are accepted. The part before the `@` only accepts the characters valid in an email address.
+- Personal email providers are blocked with a short list (`src/email-check.js`), including US ISPs and common disposable addresses. Subdomains count too (`nc.rr.com` is `rr.com`). Big providers are also blocked under their country domains (`yahoo.co.uk`, `hotmail.com.ar`…), but not under generic domains companies use (`.io`, `.ai`, `.tv`…).
+- Domains with accented letters (`müller-logistik.de`) are accepted. Look-alike spellings are normalized first, so `ｇｍａｉｌ.com` counts as `gmail.com`. The part before the `@` only accepts the characters valid in an email address.
 
 ## Development
 

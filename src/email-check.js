@@ -35,13 +35,15 @@
     'dk', 'ee', 'es', 'fi', 'fr', 'gr', 'hk', 'hr', 'hu', 'id', 'ie', 'il', 'in',
     'it', 'jp', 'kr', 'kz', 'lt', 'lu', 'lv', 'mx', 'my', 'nl', 'no', 'nz', 'pe',
     'ph', 'pl', 'pt', 'ro', 'rs', 'ru', 'se', 'sg', 'si', 'sk', 'th', 'tr', 'tw',
-    'ua', 'uk', 'uy', 've', 'vn', 'za',
+    'ua', 'uk', 'us', 'uy', 've', 'vn', 'za',
   ].join('|');
+  // Second-level forms (.com.co, .co.uk) are always country domains, so any
+  // two letters are fine there.
   var ANY_TLD_PATTERN = new RegExp(
-    '^(' + PROVIDERS_ANY_TLD.join('|') + ')\\.(com|net|org|' + COUNTRIES + '|com?\\.(' + COUNTRIES + '))$'
+    '^(' + PROVIDERS_ANY_TLD.join('|') + ')\\.(com|net|org|' + COUNTRIES + '|com?\\.[a-z]{2})$'
   );
 
-  // Specific domains.
+  // Specific domains. Their subdomains count too (nc.rr.com is rr.com).
   var DOMAINS = [
     // Apple
     'icloud.com', 'me.com', 'mac.com',
@@ -53,12 +55,19 @@
     'usa.com', 'att.net', 'sbcglobal.net', 'bellsouth.net', 'comcast.net',
     'verizon.net', 'cox.net', 'charter.net', 'earthlink.net', 'juno.com',
     'optonline.net', 'frontier.com', 'rogers.com', 'shaw.ca', 'sympatico.ca',
+    'zohomail.com', 'tutamail.com', 'lycos.com',
+    // US ISPs (small fleet owners often use these)
+    'rr.com', 'roadrunner.com', 'twc.com', 'centurylink.net', 'windstream.net',
+    'frontiernet.net', 'embarqmail.com', 'netzero.net', 'netzero.com',
+    'mindspring.com', 'cableone.net', 'suddenlink.net', 'mediacombb.net', 'wowway.com',
     // Europe
     'web.de', 'freenet.de', 't-online.de', 'orange.fr', 'wanadoo.fr',
     'free.fr', 'laposte.net', 'sfr.fr', 'libero.it', 'virgilio.it',
     'tiscali.it', 'btinternet.com', 'sky.com', 'virginmedia.com',
     'seznam.cz', 'wp.pl', 'o2.pl', 'interia.pl', 'onet.pl',
     'rambler.ru', 'list.ru', 'bk.ru', 'ukr.net',
+    'abv.bg', 'email.cz', 'centrum.cz', 'gazeta.pl', 'alice.it', 'arcor.de',
+    'bluewin.ch', 'ziggo.nl', 'telenet.be',
     // Asia
     'qq.com', '163.com', '126.com', 'sina.com', 'sohu.com', 'aliyun.com',
     'naver.com', 'daum.net', 'hanmail.net', 'rediffmail.com',
@@ -84,13 +93,21 @@
   }
 
   function isPersonalDomain(domain) {
-    domain = String(domain || '').toLowerCase().trim();
-    return !!DOMAIN_SET[domain] || ANY_TLD_PATTERN.test(domain);
+    domain = String(domain || '').normalize('NFKC').toLowerCase().trim();
+    if (ANY_TLD_PATTERN.test(domain)) return true;
+    // The domain itself or any parent domain (nc.rr.com → rr.com).
+    var parts = domain.split('.');
+    for (var i = 0; i < parts.length - 1; i++) {
+      if (DOMAIN_SET[parts.slice(i).join('.')]) return true;
+    }
+    return false;
   }
 
   /** Returns { ok: true, email } or { ok: false, error }. */
   function validateWorkEmail(value) {
-    var email = String(value || '').trim().toLowerCase();
+    // NFKC turns look-alike spellings into what mail servers actually use
+    // ("ｇｍａｉｌ.com" or "gmaⅰl.com" → "gmail.com").
+    var email = String(value || '').normalize('NFKC').trim().toLowerCase();
     if (!email) return { ok: false, error: ERRORS.REQUIRED };
     if (!EMAIL_FORMAT.test(email)) return { ok: false, error: ERRORS.INVALID };
     if (isPersonalDomain(getDomain(email))) return { ok: false, error: ERRORS.PERSONAL };
