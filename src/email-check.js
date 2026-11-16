@@ -17,17 +17,28 @@
   };
 
   // Basic format: name@domain.tld (strict validation happens in the backend).
-  var EMAIL_FORMAT = /^[^\s@]+@([a-z0-9-]+\.)+[a-z]{2,}$/i;
+  // The name part only allows the characters valid in an unquoted address, so
+  // HTML like "<img ...>" is rejected. Domains may use accented letters (IDN).
+  var EMAIL_FORMAT = /^[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@([\p{L}\p{N}-]+\.)+(\p{L}{2,}|xn--[a-z0-9-]+)$/iu;
 
-  // Providers that exist under many country TLDs.
-  // Matches provider + .com / .net / .xx / .co.xx / .com.xx
+  // Providers that exist under many country domains.
+  // Matches provider + .com / .net / .org / .<country> / .co.<country> / .com.<country>
   var PROVIDERS_ANY_TLD = [
     'gmail', 'googlemail', 'yahoo', 'ymail', 'rocketmail',
     'hotmail', 'outlook', 'live', 'msn', 'windowslive',
     'aol', 'aim', 'gmx', 'yandex', 'mail', 'zoho', 'inbox',
   ];
+  // Only real country domains where these providers operate. Generic ones that
+  // companies use (.io, .ai, .tv, .co, .me…) are left out on purpose.
+  var COUNTRIES = [
+    'ar', 'at', 'au', 'be', 'bg', 'br', 'by', 'ca', 'ch', 'cl', 'cn', 'cz', 'de',
+    'dk', 'ee', 'es', 'fi', 'fr', 'gr', 'hk', 'hr', 'hu', 'id', 'ie', 'il', 'in',
+    'it', 'jp', 'kr', 'kz', 'lt', 'lu', 'lv', 'mx', 'my', 'nl', 'no', 'nz', 'pe',
+    'ph', 'pl', 'pt', 'ro', 'rs', 'ru', 'se', 'sg', 'si', 'sk', 'th', 'tr', 'tw',
+    'ua', 'uk', 'uy', 've', 'vn', 'za',
+  ].join('|');
   var ANY_TLD_PATTERN = new RegExp(
-    '^(' + PROVIDERS_ANY_TLD.join('|') + ')\\.(com|net|org|[a-z]{2}|com?\\.[a-z]{2})$'
+    '^(' + PROVIDERS_ANY_TLD.join('|') + ')\\.(com|net|org|' + COUNTRIES + '|com?\\.(' + COUNTRIES + '))$'
   );
 
   // Specific domains.
@@ -51,9 +62,17 @@
     // Asia
     'qq.com', '163.com', '126.com', 'sina.com', 'sohu.com', 'aliyun.com',
     'naver.com', 'daum.net', 'hanmail.net', 'rediffmail.com',
+    'foxmail.com', 'yeah.net', '139.com', '188.com', 'sina.cn',
+    // Russia, Europe and Oceania (more)
+    'ya.ru', 'posteo.de', 'mailbox.org', 'duck.com',
+    'bigpond.com', 'bigpond.net.au', 'optusnet.com.au', 'xtra.co.nz',
     // Latam
     'uol.com.br', 'bol.com.br', 'terra.com.br', 'ig.com.br',
     'fibertel.com.ar', 'speedy.com.ar', 'arnet.com.ar', 'prodigy.net.mx',
+    // Disposable addresses
+    'mailinator.com', 'guerrillamail.com', 'guerrillamail.net', 'sharklasers.com',
+    'yopmail.com', '10minutemail.com', 'temp-mail.org', 'trashmail.com',
+    'getnada.com', 'maildrop.cc', 'dispostable.com',
   ];
 
   var DOMAIN_SET = Object.create(null);

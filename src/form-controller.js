@@ -12,7 +12,14 @@
  *     submitCheck:  function (payload) { return fetch(...) },  // Motorq API
  *     submitExpert: function (payload) { return fetch(...) },  // HubSpot Forms API
  *     getTurnstileToken: function () { return turnstile.getResponse() },
+ *     resetTurnstile: function () { turnstile.reset() },       // optional
  *   });
+ *
+ * Submit functions return a promise. If it resolves with an object that has a
+ * numeric `status` (like a fetch Response), only `successStatuses` (default
+ * 200 and 202) count as success. A rejection or a thrown error is a failure.
+ * After a failed submit the Turnstile widget is reset, because its tokens can
+ * only be used once (resetTurnstile, or window.turnstile.reset() by default).
  */
 (function (root) {
   'use strict';
@@ -68,6 +75,7 @@
 
     var sel = merge(DEFAULT_SELECTORS, config.selectors || {});
     var msg = Object.assign({}, MESSAGES, config.messages || {});
+    var successStatuses = config.successStatuses || [200, 202];
     var container = typeof config.root === 'string' ? document.querySelector(config.root) : config.root;
     var $ = function (s) { return container.querySelector(s); };
     var $$ = function (s) { return Array.prototype.slice.call(container.querySelectorAll(s)); };
@@ -88,13 +96,32 @@
     /* ----- Navigation ----- */
 
     function goTo(step, opts) {
-      if (!(opts && opts.isBack)) state.history.push(state.step);
+      opts = opts || {};
+      if (!opts.isBack) state.history.push(state.step);
       state.step = step;
       Object.keys(sel.steps).forEach(function (key) {
         var node = $(sel.steps[key]);
-        if (node) node.hidden = key !== step;
+        if (!node) return;
+        var hide = key !== step;
+        node.hidden = hide;
+        // Site CSS (e.g. a Webflow class with display:flex) can override the
+        // hidden attribute, so the inline style is set as well.
+        if (node.style) node.style.display = hide ? 'none' : '';
       });
+      if (!opts.initial) focusStep($(sel.steps[step]));
       if (config.onStep) config.onStep(step, getState());
+    }
+
+    // Moves keyboard focus into the step just shown, so it isn't lost on a
+    // button that was hidden.
+    function focusStep(node) {
+      if (!node || typeof node.querySelector !== 'function') return;
+      var target = node.querySelector('input:not([type="hidden"]):not([disabled]), textarea, select');
+      if (!target) {
+        if (!node.hasAttribute('tabindex')) node.setAttribute('tabindex', '-1');
+        target = node;
+      }
+      if (typeof target.focus === 'function') target.focus();
     }
 
     function back() {
@@ -161,11 +188,12 @@
       };
 
       setBusy(true);
-      return Promise.resolve(config.submitCheck(payload)).then(function () {
+      return callSubmit(config.submitCheck, payload).then(function () {
         setBusy(false);
         goTo('success');
       }).catch(function (err) {
         setBusy(false);
+        resetTurnstile();
         showError(el.detailsError, (err && err.userMessage) || msg.server);
         if (config.onError) config.onError(err);
       });
@@ -184,7 +212,7 @@
       var payload = { fullName: name, email: emailCheck.email, vinCount: state.vins.length };
 
       setBusy(true);
-      return Promise.resolve(config.submitExpert(payload)).then(function () {
+      return callSubmit(config.submitExpert, payload).then(function () {
         setBusy(false);
         goTo('expertSuccess');
       }).catch(function (err) {
@@ -195,6 +223,31 @@
     }
 
     /* ----- Helpers ----- */
+
+    // Runs a submit function. A thrown error, a rejection or an HTTP status
+    // outside successStatuses all end up as a rejected promise.
+    function callSubmit(fn, payload) {
+      return new Promise(function (resolve) {
+        if (typeof fn !== 'function') throw new Error('Submit function is not configured');
+        resolve(fn(payload));
+      }).then(function (res) {
+        if (res && typeof res.status === 'number' && successStatuses.indexOf(res.status) === -1) {
+          var err = new Error('HTTP ' + res.status);
+          err.status = res.status;
+          err.response = res;
+          throw err;
+        }
+        return res;
+      });
+    }
+
+    // Turnstile tokens can only be used once: get a new one after a failure.
+    function resetTurnstile() {
+      try {
+        if (config.resetTurnstile) config.resetTurnstile();
+        else if (root.turnstile && typeof root.turnstile.reset === 'function') root.turnstile.reset();
+      } catch (e) { /* a broken widget must not hide the error message */ }
+    }
 
     function showError(node, text) {
       if (!node) return;
@@ -224,19 +277,24 @@
     on(el.fileInput, 'change', function () { setFile(el.fileInput.files[0]); });
     on(el.fileClear, 'click', prevent(function () { setFile(null); }));
     on(el.textarea, 'input', function () { showError(el.vinsError, ''); refreshVinsButton(); });
+    // Paste doesn't read the clipboard: it moves focus to the text field so the
+    // user pastes there themselves (on mobile this opens the keyboard).
     on(el.pasteButton, 'click', prevent(function () {
-      if (!navigator.clipboard || !navigator.clipboard.readText) return;
-      navigator.clipboard.readText().then(function (text) {
-        el.textarea.value = text;
-        refreshVinsButton();
-      }).catch(function () { /* clipboard permission denied */ });
+      if (el.textarea && typeof el.textarea.focus === 'function') el.textarea.focus();
     }));
     on(el.vinsSubmit, 'click', prevent(submitVins));
     on(el.detailsSubmit, 'click', prevent(submitDetails));
     on(el.expertSubmit, 'click', prevent(submitExpert));
     $$(sel.back).forEach(function (b) { on(b, 'click', prevent(back)); });
 
-    goTo('vins', { isBack: true });
+    // Error messages are announced by screen readers.
+    [el.vinsError, el.detailsError, el.expertError].forEach(function (node) {
+      if (node && !node.getAttribute('role') && !node.getAttribute('aria-live')) {
+        node.setAttribute('role', 'alert');
+      }
+    });
+
+    goTo('vins', { isBack: true, initial: true });
     refreshVinsButton();
 
     return { getState: getState, goTo: goTo, back: back };

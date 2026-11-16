@@ -164,14 +164,15 @@
     var shown = Object.assign({}, payload);
     if (shown.vins && shown.vins.length > 160) shown.vins = shown.vins.slice(0, 160) + '… (' + shown.vins.length + ' chars)';
     log.textContent = 'POST ' + target + '\n' + JSON.stringify(shown, null, 2);
-    return new Promise(function (resolve, reject) {
+    return new Promise(function (resolve) {
       setTimeout(function () {
+        // Resolves like fetch(): an error status is a resolved response, not a rejection.
         if (document.getElementById('t-fail').checked) {
           log.textContent += '\n\n→ 500 (mock)';
-          reject(new Error('mock 500'));
+          resolve({ ok: false, status: 500 });
         } else {
           log.textContent += '\n\n→ 202 Accepted (mock)';
-          resolve();
+          resolve({ ok: true, status: 202 });
           if (document.getElementById('t-reset').checked) setTimeout(function () { location.reload(); }, 2500);
         }
       }, 700);
@@ -183,6 +184,7 @@
     getTurnstileToken: function () {
       return document.getElementById('mock-turnstile').checked ? 'mock-turnstile-token' : '';
     },
+    resetTurnstile: function () { document.getElementById('mock-turnstile').checked = false; },
     submitCheck: function (p) { return mockRequest('Motorq API', p); },
     submitExpert: function (p) { return mockRequest('HubSpot Forms API', p); },
     onStep: function (step, s) {
