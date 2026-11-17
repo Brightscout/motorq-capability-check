@@ -55,7 +55,9 @@ async function lastRequest(page) {
 }
 
 async function fillExpert(page, { phone = '(555) 123-4567' } = {}) {
-  await page.selectOption('[data-field="fleet-size"]', '26-100');
+  await page.fill('[data-field="expert-first-name"]', 'Jane');
+  await page.fill('[data-field="expert-last-name"]', 'Doe');
+  await page.selectOption('[data-field="fleet-size"]', '50-250');
   await page.fill('[data-field="company-name"]', 'Acme Logistics');
   await page.fill('[data-field="company-email"]', 'Jane@Acme.com');
   await page.selectOption('[data-field="phone-country"]', '+52');
@@ -245,7 +247,7 @@ test('expert link from step 1 with no VINs: opens the form; payload has source "
   const req = await lastRequest(page);
   assert.strictEqual(req.target, 'POST HubSpot Forms API');
   assert.deepStrictEqual(req.payload, {
-    fleetSize: '26-100', companyName: 'Acme Logistics', email: 'jane@acme.com',
+    firstName: 'Jane', lastName: 'Doe', fleetSize: '50-250', companyName: 'Acme Logistics', email: 'jane@acme.com',
     phone: '+52 (555) 123-4567', source: 'link',
   });
   await context.close();
@@ -287,7 +289,7 @@ test('expert link from step 2: opens the form with the processed VIN count; Back
   await waitStep(page, 'expertSuccess');
   const { payload } = await lastRequest(page);
   assert.deepStrictEqual(payload, {
-    fleetSize: '26-100', companyName: 'Acme Logistics', email: 'jane@acme.com',
+    firstName: 'Jane', lastName: 'Doe', fleetSize: '50-250', companyName: 'Acme Logistics', email: 'jane@acme.com',
     phone: '+52 (555) 123-4567', source: 'link', vinCount: 3, turnstileToken: 'mock-expert-token',
   });
   await context.close();
@@ -306,13 +308,13 @@ test('more than 1,000 VINs opens the expert form automatically with source "over
   await waitStep(page, 'expertSuccess');
   const { payload } = await lastRequest(page);
   assert.deepStrictEqual(payload, {
-    fleetSize: '26-100', companyName: 'Acme Logistics', email: 'jane@acme.com',
+    firstName: 'Jane', lastName: 'Doe', fleetSize: '50-250', companyName: 'Acme Logistics', email: 'jane@acme.com',
     phone: '+52 (555) 123-4567', source: 'over-limit', vinCount: 1001,
   });
   await context.close();
 });
 
-test('expert form validation: fleet size, company name, work email and phone; Turnstile never blocks', async () => {
+test('expert form validation: name, fleet size, company name, work email and phone; Turnstile never blocks', async () => {
   const { page, context } = await open();
   await page.click('[data-step="vins"] [data-action="open-expert"]');
   await waitStep(page, 'expert');
@@ -322,8 +324,14 @@ test('expert form validation: fleet size, company name, work email and phone; Tu
   assert.ok((await page.$$eval('[data-field="fleet-size"] option', (o) => o.length)) > 1, 'fleet sizes not filled');
   assert.strictEqual(await page.inputValue('[data-field="phone-country"]'), '+1', 'no default country code');
   await submit();
+  assert.strictEqual(await error(), 'Please enter your first name.');
+  await page.fill('[data-field="expert-first-name"]', 'Jane');
+  await submit();
+  assert.strictEqual(await error(), 'Please enter your last name.');
+  await page.fill('[data-field="expert-last-name"]', 'Doe');
+  await submit();
   assert.strictEqual(await error(), 'Please select your fleet size.');
-  await page.selectOption('[data-field="fleet-size"]', '1-25');
+  await page.selectOption('[data-field="fleet-size"]', '1-50');
   await submit();
   assert.strictEqual(await error(), 'Please enter your company name.');
   await page.fill('[data-field="company-name"]', 'Acme');
@@ -355,5 +363,45 @@ test('button labels match the design', async () => {
   assert.strictEqual(await page.textContent('[data-action="vins-submit"]'), 'Get My Results');
   assert.strictEqual(await page.textContent('[data-action="details-submit"]'), 'Email My Results');
   assert.strictEqual(await page.textContent('[data-action="expert-submit"]'), 'Submit');
+  await context.close();
+});
+
+test('step 2 → expert link: first name, last name and email carry over to the expert form', async () => {
+  const { page, context } = await open();
+  await page.click('[data-tab="paste"]');
+  await page.fill('[data-field="vins-text"]', `${A}\n${B}`);
+  await page.click('[data-action="vins-submit"]');
+  await waitStep(page, 'details');
+  await page.fill('[data-field="first-name"]', 'Jane');
+  await page.fill('[data-field="last-name"]', 'Doe');
+  await page.fill('[data-field="email"]', 'jane@acme.com');
+  await page.click('[data-step="details"] [data-action="open-expert"]');
+  await waitStep(page, 'expert');
+  assert.strictEqual(await page.inputValue('[data-field="expert-first-name"]'), 'Jane');
+  assert.strictEqual(await page.inputValue('[data-field="expert-last-name"]'), 'Doe');
+  assert.strictEqual(await page.inputValue('[data-field="company-email"]'), 'jane@acme.com');
+  await context.close();
+});
+
+test('results email page: expert form only, prefilled from the URL, posts to the full report form', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(PAGE + '?page=full-report&firstname=Jos%C3%A9&lastname=Doe&email=jose%40acme.com');
+  await page.uncheck('#t-reset');
+  assert.ok(await visible(page, '[data-step="expert"]'));
+  assert.ok(!(await visible(page, '[data-step="vins"]')));
+  assert.strictEqual(await page.inputValue('[data-field="expert-first-name"]'), 'José');
+  assert.strictEqual(await page.inputValue('[data-field="company-email"]'), 'jose@acme.com');
+  await page.selectOption('[data-field="fleet-size"]', 'More than 1,000');
+  await page.fill('[data-field="company-name"]', 'Acme Logistics');
+  await page.fill('[data-field="phone"]', '555 123 4567');
+  await page.click('[data-action="expert-submit"]');
+  await waitStep(page, 'expertSuccess');
+  const { payload } = await lastRequest(page);
+  assert.deepStrictEqual(payload, {
+    firstName: 'José', lastName: 'Doe', fleetSize: 'More than 1,000', companyName: 'Acme Logistics',
+    email: 'jose@acme.com', phone: '+1 555 123 4567', source: 'email',
+  });
+  assert.match(await page.textContent('#t-hubspot'), /8409589a-e0c5-411e-9a55-14aad0619df1/);
   await context.close();
 });

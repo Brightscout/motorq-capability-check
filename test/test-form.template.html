@@ -116,6 +116,10 @@
       <section data-step="expert" hidden>
         <h2>Talk to an Expert</h2>
         <p class="lead">Tell us about your fleet and our team will reach out.</p>
+        <label>First Name</label>
+        <input type="text" data-field="expert-first-name" autocomplete="given-name">
+        <label>Last Name</label>
+        <input type="text" data-field="expert-last-name" autocomplete="family-name">
         <label>Fleet Size</label>
         <select data-field="fleet-size"><option value="">Select fleet size</option></select>
         <label>Company Name</label>
@@ -176,6 +180,10 @@
 
       <h3 style="margin-top:12px">Last request</h3>
       <pre id="t-log">—</pre>
+
+      <h3 style="margin-top:12px">HubSpot body (not sent)</h3>
+      <pre id="t-hubspot">—</pre>
+      <p class="note"><a href="?page=full-report&amp;firstname=Jane&amp;lastname=Doe&amp;email=jane@acme.com">Open as the results email page</a> · <a href="?">Back to the form</a></p>
     </div>
   </aside>
 </div>
@@ -184,6 +192,7 @@
 <script>/*__VIN_PARSER__*/</script>
 <script>/*__EMAIL_CHECK__*/</script>
 <script>/*__CONTACT_CHECK__*/</script>
+<script>/*__HUBSPOT__*/</script>
 <script>/*__FORM_CONTROLLER__*/</script>
 <script>
 (function () {
@@ -227,7 +236,17 @@
     },
     resetExpertTurnstile: function () { document.getElementById('mock-turnstile-expert').checked = false; },
     submitCheck: function (p) { return mockRequest('Motorq API', p); },
-    submitExpert: function (p) { return mockRequest('HubSpot Forms API', p); },
+    // Results email page: open this file with
+    // ?page=full-report&firstname=Jane&lastname=Doe&email=jane@acme.com
+    page: /[?&]page=full-report(&|$)/.test(location.search) ? 'full-report' : undefined,
+    // Shows the body the real HubSpot submit would send, without sending it.
+    submitExpert: function (p) {
+      var H = MotorqHubSpot;
+      var form = H.DEFAULTS.forms[H.formKeyFor(p.source)];
+      document.getElementById('t-hubspot').textContent = 'form ' + form.formId + '\n' +
+        JSON.stringify(H.buildBody(p, form, { uri: location.href, name: document.title }), null, 2);
+      return mockRequest('HubSpot Forms API', p);
+    },
     onStep: function (step, s) {
       document.getElementById('t-step').textContent = step;
       document.getElementById('t-count').textContent = s.vinCount;

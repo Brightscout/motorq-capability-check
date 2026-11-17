@@ -1,5 +1,5 @@
 // Builds:
-//   dist/capability-check.js  – the three source files in one script, to serve via jsDelivr
+//   dist/capability-check.js  – the source files in one script, to serve via jsDelivr
 //   dist/test-form.html       – self-contained test form (SheetJS + scripts inlined)
 const fs = require('fs');
 const path = require('path');
@@ -8,7 +8,7 @@ const root = __dirname;
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const pkg = JSON.parse(read('package.json'));
 
-const SOURCES = ['src/vin-parser.js', 'src/email-check.js', 'src/contact-check.js', 'src/form-controller.js'];
+const SOURCES = ['src/vin-parser.js', 'src/email-check.js', 'src/contact-check.js', 'src/hubspot.js', 'src/form-controller.js'];
 
 const banner = `/*! Motorq Capability Check v${pkg.version} | Brightscout */\n`;
 const bundle = banner + SOURCES.map((f) => `/* ${f} */\n${read(f)}`).join('\n');
@@ -19,6 +19,7 @@ const testForm = read('test/test-form.template.html')
   .replace('/*__VIN_PARSER__*/', () => inline(read('src/vin-parser.js')))
   .replace('/*__EMAIL_CHECK__*/', () => inline(read('src/email-check.js')))
   .replace('/*__CONTACT_CHECK__*/', () => inline(read('src/contact-check.js')))
+  .replace('/*__HUBSPOT__*/', () => inline(read('src/hubspot.js')))
   .replace('/*__FORM_CONTROLLER__*/', () => inline(read('src/form-controller.js')));
 
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });

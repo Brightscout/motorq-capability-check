@@ -12,9 +12,9 @@
     PHONE_INVALID: 'phone_invalid',
   };
 
-  // Placeholder options until the client sends the final ones. Replace them
-  // through the `fleetSizes` option of MotorqCapCheck.init.
-  var FLEET_SIZES = ['1-25', '26-100', '101-500', '501-1,000', '1,000+'];
+  // The `fleet_size` options of Motorq's HubSpot forms. Values must match them
+  // exactly. Replace through the `fleetSizes` option of MotorqCapCheck.init.
+  var FLEET_SIZES = ['1-50', '50-250', '250-500', '500-1,000', 'More than 1,000'];
 
   // Country codes for the phone select. Replace through the `phoneCountries` option.
   var PHONE_COUNTRIES = [

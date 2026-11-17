@@ -6,13 +6,16 @@
  * can be wired to the Webflow markup by changing only the `selectors` object.
  *
  * Requires MotorqVins (vin-parser.js), MotorqEmail (email-check.js) and
- * MotorqContact (contact-check.js).
+ * MotorqContact (contact-check.js). Talk to an Expert posts to HubSpot through
+ * MotorqHubSpot (hubspot.js) unless submitExpert is given.
  *
  * Usage:
  *   MotorqCapCheck.init({
  *     root: '#cap-check',
+ *     page: 'full-report',                                     // optional: results email page
  *     submitCheck:  function (payload, opts) { return fetch(..., { signal: opts.signal }) },
- *     submitExpert: function (payload) { return fetch(...) },  // HubSpot Forms API
+ *     submitExpert: function (payload, opts) { ... },          // optional, replaces HubSpot
+ *     hubspot: { portalId: '...', forms: { ... } },            // optional, see hubspot.js
  *     getTurnstileToken: function () { return turnstile.getResponse() },
  *     resetTurnstile: function () { turnstile.reset() },       // optional
  *     getExpertTurnstileToken: function () { ... },            // optional, never required
@@ -62,6 +65,8 @@
     detailsError: '[data-error="details"]',
     // Talk to an Expert
     openExpert: '[data-action="open-expert"]',
+    expertFirstName: '[data-field="expert-first-name"]',
+    expertLastName: '[data-field="expert-last-name"]',
     fleetSize: '[data-field="fleet-size"]',
     companyName: '[data-field="company-name"]',
     companyEmail: '[data-field="company-email"]',
@@ -101,6 +106,16 @@
     var C = root.MotorqContact;
     if (!V || !E || !C) throw new Error('vin-parser.js, email-check.js and contact-check.js must be loaded first');
 
+    // 'full-report': the page the results email links to. Only the expert
+    // form is shown, prefilled from the URL, and it posts to the full report
+    // HubSpot form.
+    var fullReport = config.page === 'full-report';
+
+    // Talk to an Expert posts to the HubSpot Forms API (hubspot.js) unless a
+    // custom submitExpert is given.
+    var H = root.MotorqHubSpot;
+    var expertSubmitter = config.submitExpert || (H ? H.createSubmitter(config.hubspot) : null);
+
     var sel = merge(DEFAULT_SELECTORS, config.selectors || {});
     var msg = Object.assign({}, MESSAGES, config.messages || {});
     var successStatuses = config.successStatuses || [200, 202];
@@ -115,7 +130,7 @@
 
     // Each step gets a browser history entry, so the browser's Back button (or
     // Android's back gesture) goes to the previous step instead of leaving the page.
-    var useHistory = config.history !== false && !!root.history &&
+    var useHistory = !fullReport && config.history !== false && !!root.history &&
       typeof root.history.pushState === 'function' && typeof root.addEventListener === 'function';
     // Steps our own Back button asked the browser to go back to, in order.
     var expectedPops = [];
@@ -145,6 +160,7 @@
       vinsSubmit: $(sel.vinsSubmit), vinsError: $(sel.vinsError),
       firstName: $(sel.firstName), lastName: $(sel.lastName), email: $(sel.email),
       detailsSubmit: $(sel.detailsSubmit), detailsError: $(sel.detailsError),
+      expertFirstName: $(sel.expertFirstName), expertLastName: $(sel.expertLastName),
       fleetSize: $(sel.fleetSize), companyName: $(sel.companyName), companyEmail: $(sel.companyEmail),
       phoneCountry: $(sel.phoneCountry), phone: $(sel.phone),
       expertSubmit: $(sel.expertSubmit), expertError: $(sel.expertError),
@@ -470,7 +486,28 @@
       if (state.busy || state.step === 'expert') return;
       state.expertSource = 'link';
       state.expertFrom = state.step;
+      prefillExpertFromDetails();
       goTo('expert');
+    }
+
+    // Copies what the user already typed in step 2 into the empty expert
+    // fields, so they don't type it twice.
+    function prefillExpertFromDetails() {
+      fillIfEmpty(el.expertFirstName, value(el.firstName));
+      fillIfEmpty(el.expertLastName, value(el.lastName));
+      fillIfEmpty(el.companyEmail, value(el.email));
+    }
+
+    // Results email page: first name, last name and email come in the URL
+    // (?firstname=…&lastname=…&email=…), set by Motorq's backend.
+    function prefillExpertFromUrl() {
+      var params = readParams(config.search !== undefined ? config.search
+        : (root.location ? root.location.search : ''));
+      var names = Object.assign({ firstName: 'firstname', lastName: 'lastname', email: 'email' },
+        config.prefillParams || {});
+      fillIfEmpty(el.expertFirstName, params[names.firstName]);
+      fillIfEmpty(el.expertLastName, params[names.lastName]);
+      fillIfEmpty(el.companyEmail, params[names.email]);
     }
 
     // VINs the user has loaded: the processed ones, or (from step 1) the live
@@ -488,6 +525,11 @@
       showError(el.expertError, '');
       var fail = function (key) { return Promise.resolve(showError(el.expertError, msg[key])); };
 
+      // Name fields are only checked when the markup has them.
+      var firstName = value(el.expertFirstName);
+      if (el.expertFirstName && !firstName) return fail('first_name_required');
+      var lastName = value(el.expertLastName);
+      if (el.expertLastName && !lastName) return fail('last_name_required');
       var fleetSize = value(el.fleetSize);
       if (!fleetSize) return fail('fleet_size_required');
       var companyName = value(el.companyName);
@@ -499,13 +541,16 @@
       var phoneCheck = C.validatePhone(el.phone && el.phone.value);
       if (!phoneCheck.ok) return fail(phoneCheck.error);
 
-      var payload = {
+      var payload = {};
+      if (firstName) payload.firstName = firstName;
+      if (lastName) payload.lastName = lastName;
+      Object.assign(payload, {
         fleetSize: fleetSize,
         companyName: companyName,
         email: emailCheck.email,
         phone: country + ' ' + phoneCheck.phone,
         source: state.expertSource || 'link',
-      };
+      });
       var vinCount = currentVinCount();
       if (vinCount) payload.vinCount = vinCount;
 
@@ -517,7 +562,7 @@
       if (token) payload.turnstileToken = token;
 
       setBusy(true);
-      return callSubmit(config.submitExpert, payload).then(function () {
+      return callSubmit(expertSubmitter, payload).then(function () {
         setBusy(false);
         resetTurnstile(config.resetExpertTurnstile, false);
         goTo('expertSuccess');
@@ -574,6 +619,27 @@
 
     function value(node) {
       return (node && node.value || '').trim();
+    }
+
+    function fillIfEmpty(node, text) {
+      if (node && text && !value(node)) node.value = text;
+    }
+
+    // "?a=1&b=x%20y" → { a: '1', b: 'x y' }. "+" is a space, as in form URLs.
+    function readParams(search) {
+      var out = {};
+      String(search || '').replace(/^\?/, '').split('&').forEach(function (pair) {
+        if (!pair) return;
+        var i = pair.indexOf('=');
+        var k = i === -1 ? pair : pair.slice(0, i);
+        var v = i === -1 ? '' : pair.slice(i + 1);
+        try {
+          k = decodeURIComponent(k.replace(/\+/g, ' '));
+          v = decodeURIComponent(v.replace(/\+/g, ' '));
+        } catch (e) { return; /* malformed escape: skip it */ }
+        if (!(k in out)) out[k] = v.trim();
+      });
+      return out;
     }
 
     // Fills a <select> with the configured options, unless the markup already
@@ -699,7 +765,13 @@
       setTab(tabName(selected || tabs[0]));
     }
 
-    goTo('vins', { isBack: true, initial: true });
+    if (fullReport) {
+      state.expertSource = 'email';
+      prefillExpertFromUrl();
+      goTo('expert', { isBack: true, initial: true });
+    } else {
+      goTo('vins', { isBack: true, initial: true });
+    }
     renderLive();
     refreshVinsButton();
 

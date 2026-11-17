@@ -9,7 +9,8 @@ Everything runs in the browser. There is no intermediate server.
 1. **Step 1: VINs.** Two tabs: **Upload File** (`.xlsx`, `.csv`, `.txt`) or **Paste VINs**. As soon as a file is selected or text is pasted, the script reads it, checks the characters, extracts and dedupes the VINs and shows "N VINs found". Errors only appear after pressing **Get My Results**. Nothing is sent yet; VINs stay in memory.
 2. **Step 2: contact details.** First name, last name, work email (personal email providers are blocked) and Cloudflare Turnstile.
 3. **Submit:** a single POST to the Motorq API. The API is asynchronous: a 200/202 response shows the success screen. Motorq's backend creates the HubSpot lead and sends the results email.
-4. **Talk to an Expert** (posts to the HubSpot Forms API) opens in two ways: automatically with more than 1,000 VINs, or from the "talk with our team" link under the form on steps 1 and 2, with or without VINs.
+4. **Talk to an Expert** (posts to the HubSpot Forms API) opens in two ways: automatically with more than 1,000 VINs, or from the "talk with our team" link under the form on steps 1 and 2, with or without VINs. Coming from step 2, the first name, last name and email the user already typed are copied into the empty expert fields.
+5. **Results email page** (`page: 'full-report'`). The button in the results email links to a separate page with the user's data in the URL (`?firstname=Jane&lastname=Doe&email=jane@acme.com`), added by Motorq's backend. That page shows only the expert form, prefilled from the URL, and posts to the full report HubSpot form. HubSpot dedupes contacts by email, so it updates the existing contact.
 
 ### Payloads
 
@@ -21,17 +22,35 @@ Motorq API (`submitCheck`):
 
 `fullName` is first and last name joined with one space, trimmed.
 
-Talk to an Expert (`submitExpert`):
+Talk to an Expert (what the controller builds; `submitExpert` receives it if given):
 
 ```json
-{ "fleetSize": "26-100", "companyName": "Acme Logistics", "email": "jane@acme.com",
-  "phone": "+1 (555) 123-4567", "source": "over-limit", "vinCount": 1500, "turnstileToken": "..." }
+{ "firstName": "Jane", "lastName": "Doe", "fleetSize": "50-250", "companyName": "Acme Logistics",
+  "email": "jane@acme.com", "phone": "+1 (555) 123-4567", "source": "over-limit", "vinCount": 1500,
+  "turnstileToken": "..." }
 ```
 
-- `source`: `"over-limit"` (more than 1,000 VINs) or `"link"` (the link under the form).
+- `firstName`, `lastName`: only when the markup has the expert name fields (then they are required).
+- `source`: `"over-limit"` (more than 1,000 VINs), `"link"` (the link under the form) or `"email"` (results email page).
 - `vinCount`: only when the user has VINs loaded. From step 1 it is the count of the active tab; from step 2 or over the limit, the processed VINs.
 - `turnstileToken`: only when `getExpertTurnstileToken` returns one. It never blocks the submit, because HubSpot can't verify it.
 - `phone`: the country code and the number as typed.
+
+### HubSpot
+
+Without a custom `submitExpert`, the payload is posted to the [Forms API v3](https://developers.hubspot.com/docs/api/marketing/forms) (`src/hubspot.js`), portal `44687642`:
+
+| `source` | HubSpot form | Form ID |
+|---|---|---|
+| `over-limit`, `link` | 1,000+ VINs form fill | `181fa58c-3817-4e24-9e0e-2429ac41fd64` |
+| `email` | Full report (results email CTA) | `8409589a-e0c5-411e-9a55-14aad0619df1` |
+
+- Fields sent: `firstname`, `lastname`, `email`, `company`, `fleet_size`, `phone`, plus the form's hidden `form_submission___pass_to_salesforce` value (the API doesn't apply hidden defaults). `source`, `vinCount` and `turnstileToken` are not sent: the forms have no fields for them.
+- `fleet_size` values must match the form's options exactly: `1-50`, `50-250`, `250-500`, `500-1,000`, `More than 1,000` (the defaults in `src/contact-check.js`).
+- `context` carries the page URL and title, and the `hubspotutk` cookie when the HubSpot tracking code runs on the site.
+- HubSpot answers 200 on success and 400 with the list of errors (e.g. a missing required field), which shows the generic error.
+- The under-1,000 VINs form (`007b32c4-…`) is not used here: Motorq's backend handles it after the Motorq API call.
+- Other IDs can be passed with `hubspot: { portalId, forms: { expert: { formId, hidden }, fullReport: { … } } }`.
 
 ## Files
 
@@ -40,8 +59,9 @@ Talk to an Expert (`submitExpert`):
 | `src/vin-parser.js` | Reads files or pasted text, validates characters, extracts and dedupes VINs (`window.MotorqVins`) |
 | `src/email-check.js` | Work email validation and personal email blocking (`window.MotorqEmail`) |
 | `src/contact-check.js` | Name joining, phone validation, fleet size and country code options (`window.MotorqContact`) |
+| `src/hubspot.js` | Talk to an Expert submissions to the HubSpot Forms API (`window.MotorqHubSpot`) |
 | `src/form-controller.js` | Form steps, tabs, live VIN count, Back button, errors and submissions (`window.MotorqCapCheck`) |
-| `dist/capability-check.js` | The four source files bundled into one script |
+| `dist/capability-check.js` | The source files bundled into one script |
 | `dist/test-form.html` | Self-contained test form with the API, Turnstile and HubSpot mocked |
 
 ## Usage in Webflow
@@ -58,16 +78,28 @@ SheetJS has to load before the bundle (needed for `.xlsx` files):
     submitCheck: function (payload, opts) {
       return fetch(/* Motorq API endpoint */, { /* ... */ signal: opts.signal });  // return the Response
     },
-    submitExpert: function (payload, opts) {
-      return fetch(/* HubSpot Forms API */, { /* ... */ signal: opts.signal });
-    },
     // Optional:
-    // getExpertTurnstileToken: function () { ... },  // sent if present, never required
-    // fleetSizes: ['1-25', '26-100', ...],           // placeholders until the client confirms
+    // submitExpert: function (payload, opts) { ... },  // replaces the HubSpot submit
+    // getExpertTurnstileToken: function () { ... },    // sent if present, never required
+    // fleetSizes: ['1-50', '50-250', ...],              // must match the HubSpot options
     // phoneCountries: [{ value: '+1', label: 'US/CA +1' }, ...],
   });
 </script>
 ```
+
+Results email page (only the expert step and the expert success step in the markup):
+
+```html
+<script>
+  MotorqCapCheck.init({
+    root: '#full-report',
+    page: 'full-report',
+    // prefillParams: { firstName: 'firstname', lastName: 'lastname', email: 'email' },  // URL parameter names
+  });
+</script>
+```
+
+On that page Back does nothing (there is no previous step) and the browser history is not used.
 
 Pin a tag (`@v1.0.0`) instead of a branch so jsDelivr serves a fixed version.
 
@@ -117,6 +149,7 @@ The controller finds elements through `data-*` attributes. Custom selectors can 
 | `data-field="first-name"`, `"last-name"`, `"email"` | Step 2 fields |
 | `data-action="details-submit"` | "Email My Results" |
 | `data-action="open-expert"` | "Talk with our team" link (steps 1 and 2; can appear more than once) |
+| `data-field="expert-first-name"`, `"expert-last-name"` | Talk to an Expert first and last name (required by both HubSpot forms) |
 | `data-field="fleet-size"` | Fleet Size `<select>` |
 | `data-field="company-name"`, `"company-email"` | Talk to an Expert fields |
 | `data-field="phone-country"` / `data-field="phone"` | Country code `<select>` / phone number |
